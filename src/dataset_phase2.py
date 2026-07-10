@@ -62,6 +62,7 @@ class Phase2Dataset(Dataset):
     NOISE_CENTER = 0.3         # center 噪声标准差 (米)
     NOISE_SIZE = 0.15          # size 噪声标准差 (米)
     NOISE_YAW_DEG = 5.0        # yaw 噪声标准差 (度)
+    PC_INIT_PROB = 0.7          # 点云初始化概率 (否则 GT+noise)
     MATCH_MAX_DIST_PX = 80     # GT 匹配的最大 2D 中心距离 (像素)
 
     def __init__(self, data_root, split="train", cfg=None,
@@ -382,21 +383,22 @@ class Phase2Dataset(Dataset):
     # ==========================================================================
 
     def _build_target(self, obj_points, ann, sample_token):
-        """构建训练样本: 对 GT 加噪声, 计算残差作为回归目标.
+        """构建训练样本: 用点云统计量或 GT+噪声 作为初始框, 计算残差作为回归目标.
+
+        两种模式 (随机切换, 消除训练/推理 domain gap):
+          A. 点云初始化 (pc_init):  point cloud mean/PCA → 模拟推理时无 GT 的场景
+          B. GT 加噪声 (gt_noise):   GT + small noise → 模拟有 GT 匹配的推理场景
 
         流程:
           1. GT 从 global → ego 坐标系 (与 LiDAR 一致)
-          2. 对 center/size/yaw 加高斯噪声
+          2. 生成 noisy center/size/yaw (pc_init 或 gt_noise)
           3. 点云去中心化 + 旋转对齐 noisy 朝向
           4. 按物体物理范围归一化坐标 (使 SA 半径自适应物体尺度)
           5. FPS 重采样到固定点数 (256)
           6. 目标 = [Δcenter, Δsize, sin(Δyaw), cos(Δyaw)]
-
-        为什么按 extent 归一化? 不同物体尺度差异巨大 (行人 0.5m vs 卡车 10m),
-        固定的 SA 半径无法同时适配. 归一化后 SA 半径工作在"相对单位",
-        小车自动用小半径, 大车自动用大半径.
         """
         rng = np.random.default_rng()
+        use_pc_init = rng.random() < self.PC_INIT_PROB
 
         # GT global → ego
         gt_center_global = np.array(ann["translation"], dtype=np.float32)
@@ -411,11 +413,31 @@ class Phase2Dataset(Dataset):
             ego_yaw = quaternion_to_yaw(*ego_pose["rotation"])
             gt_yaw = gt_yaw - ego_yaw
 
-        # 加噪声
-        noisy_center = gt_center + rng.normal(0, self.NOISE_CENTER, 3).astype(np.float32)
-        noisy_size = gt_size + rng.normal(0, self.NOISE_SIZE, 3).astype(np.float32)
-        noisy_size = np.clip(noisy_size, 0.3, 20.0)
-        noisy_yaw = gt_yaw + math.radians(rng.normal(0, self.NOISE_YAW_DEG))
+        if use_pc_init and len(obj_points) >= 20:
+            # 点云初始化: 模拟推理时的真实输入分布
+            obj_xyz = obj_points[:, :3].astype(np.float32)
+            noisy_center = obj_xyz.mean(axis=0)
+
+            # PCA 估计朝向
+            centered = obj_xyz[:, :2] - noisy_center[:2]
+            cov = centered.T @ centered / len(centered)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            principal = eigvecs[:, -1]
+            pca_yaw = math.atan2(principal[1], principal[0])
+            pca_yaw = math.atan2(math.sin(pca_yaw), math.cos(pca_yaw))
+            if abs(pca_yaw) > math.pi / 2:
+                pca_yaw -= math.copysign(math.pi, pca_yaw)
+            noisy_yaw = float(pca_yaw)
+
+            # size: GT + 噪声 (部分可见点云无法估计完整尺寸)
+            noisy_size = gt_size + rng.normal(0, self.NOISE_SIZE, 3).astype(np.float32)
+            noisy_size = np.clip(noisy_size, 0.3, 20.0)
+        else:
+            # GT + 噪声: 保留 refiner 能力
+            noisy_center = gt_center + rng.normal(0, self.NOISE_CENTER, 3).astype(np.float32)
+            noisy_size = gt_size + rng.normal(0, self.NOISE_SIZE, 3).astype(np.float32)
+            noisy_size = np.clip(noisy_size, 0.3, 20.0)
+            noisy_yaw = gt_yaw + math.radians(rng.normal(0, self.NOISE_YAW_DEG))
 
         # 点云归一化: 去中心 + 旋转对齐 noisy 朝向
         local_xyz = obj_points[:, :3] - noisy_center
