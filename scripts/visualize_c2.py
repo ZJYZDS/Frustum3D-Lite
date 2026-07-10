@@ -31,7 +31,7 @@ OUT_DIR = "display"
 
 # 无 GT 匹配时各类别默认尺寸 (宽, 长, 高) — 典型 nuScenes 均值
 DEFAULT_SIZE = {
-    0: (0.5, 0.5, 1.7),   # person
+    0: (0.7, 0.7, 1.75),  # person
     1: (0.5, 1.8, 1.2),   # bicycle
     2: (2.0, 4.5, 1.6),   # car
     3: (0.8, 2.2, 1.5),   # motorcycle
