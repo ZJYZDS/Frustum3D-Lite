@@ -16,6 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from sklearn.cluster import DBSCAN
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -66,6 +67,43 @@ def bbox_edges_as_points(center, size, yaw, n_pts=EDGE_PTS_PER_BBOX):
         t = np.linspace(0, 1, pts_per_edge)
         all_pts.append(corners[i] + t[:, None] * (corners[j] - corners[i]))
     return np.vstack(all_pts).astype(np.float32)
+
+
+def extract_core_points(obj_pts, cls_id, bbox, uv, valid_proj, lidar_full, in_bbox_mask):
+    """中点垂直切片 + DBSCAN → 提取目标核心表面点 (与训练时 _extract_core_points 一致)."""
+    x1, y1, x2, y2 = bbox.astype(int)
+    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    crop_w = int((x2 - x1) * 0.4)
+    crop_h = int((y2 - y1) * 0.4)
+
+    if crop_w < 3 or crop_h < 3:
+        return None
+
+    mid_mask = (
+        (uv[:, 0] >= cx - crop_w / 2) & (uv[:, 0] <= cx + crop_w / 2) &
+        (uv[:, 1] >= cy - crop_h / 2) & (uv[:, 1] <= cy + crop_h / 2)
+    )
+    core_pts = lidar_full[mid_mask & valid_proj]
+    if len(core_pts) < 5:
+        return None
+
+    core_xyz = core_pts[:, :3].astype(np.float32)
+
+    if cls_id == 0:
+        eps, min_samples = 0.2, 3
+    elif cls_id in (5, 7):
+        eps, min_samples = 0.8, 12
+    else:
+        eps, min_samples = 0.5, 8
+
+    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(core_xyz)
+    labels = clustering.labels_
+    valid_labels = labels[labels >= 0]
+    if len(valid_labels) == 0:
+        return None
+
+    main_label = np.bincount(valid_labels).argmax()
+    return core_xyz[labels == main_label]
 
 
 def save_ply(path, points_list, color_list):
@@ -299,28 +337,34 @@ def main():
                 noisy_size = np.clip(noisy_size, 0.3, 20.0)
                 noisy_yaw = gt_yaw + math.radians(rng.normal(0, 5.0))
             else:
-                # 无 GT: PCA 估计初始朝向 + 点云中心
-                obj_xyz = obj_pts[:, :3]  # LiDAR 坐标系
+                # 无 GT: mid-slice + DBSCAN → 核心点 → mean/PCA
+                # (与训练时 _extract_core_points 逻辑一致)
+                cls_id = det["class_id"]
+                obj_xyz_all = obj_pts[:, :3]
+                core_xyz = extract_core_points(
+                    obj_pts, cls_id, det["bbox"],
+                    uv, valid_proj, lidar_full, in_bbox)
+                if core_xyz is not None and len(core_xyz) >= 5:
+                    obj_xyz = core_xyz
+                else:
+                    obj_xyz = obj_xyz_all
                 obj_mean = obj_xyz.mean(axis=0)
-                obj_mean_ego = (R_lidar2ego @ obj_mean.reshape(3, 1)).reshape(3) + t_lidar2ego
+                noisy_center = (R_lidar2ego @ obj_mean.reshape(3, 1)).reshape(3) + t_lidar2ego
                 noisy_size = np.array(
-                    DEFAULT_SIZE.get(det["class_id"], (2.0, 4.5, 1.6)),
+                    DEFAULT_SIZE.get(cls_id, (2.0, 4.5, 1.6)),
                     dtype=np.float32)
 
-                # PCA 估计初始 yaw: 点云主方向 (用于巴士/卡车等长条形物体)
+                # PCA 估计初始 yaw
                 centered = obj_xyz[:, :2] - obj_mean[:2]
                 cov = centered.T @ centered / len(centered)
                 eigvals, eigvecs = np.linalg.eigh(cov)
-                principal = eigvecs[:, -1]  # 最大特征值方向 (点云最长轴)
+                principal = eigvecs[:, -1]
                 pca_yaw = math.atan2(principal[1], principal[0])
-                # 标准化到 [-π/2, π/2] (消除 180° 歧义)
                 pca_yaw = math.atan2(math.sin(pca_yaw), math.cos(pca_yaw))
                 if abs(pca_yaw) > math.pi / 2:
                     pca_yaw -= math.copysign(math.pi, pca_yaw)
-
-                noisy_center = obj_mean_ego
                 noisy_yaw = float(pca_yaw)
-                cat_name = OBSTACLE_CLASSES.get(det["class_id"], ("unknown",))[0]
+                cat_name = OBSTACLE_CLASSES.get(cls_id, ("unknown",))[0]
 
             # ---- C2 推理 ----
             local_xyz = obj_pts[:, :3].astype(np.float32) - noisy_center

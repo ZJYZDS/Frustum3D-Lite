@@ -28,6 +28,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from sklearn.cluster import DBSCAN
 from torch.utils.data import Dataset
 
 from src.dataset_phase1 import (LiDARProjector, quaternion_to_yaw, quaternion_to_mat,
@@ -329,7 +330,9 @@ class Phase2Dataset(Dataset):
             return None
 
         # ---- 构建训练目标 ----
-        lidar_features, target = self._build_target(obj_pts, matched_gt, sample_token)
+        lidar_features, target = self._build_target(
+            obj_pts, matched_gt, sample_token,
+            cls_id=det["class_id"], bbox=det["bbox"], uv=uv, valid_proj=valid_proj, lidar=lidar)
 
         if self.return_category:
             cat_name = self._inst2cat_name.get(matched_gt["instance_token"], "unknown")
@@ -383,15 +386,68 @@ class Phase2Dataset(Dataset):
         return best_match
 
     # ==========================================================================
+    # 中点切片 + DBSCAN: 从 bbox 点云中提取目标核心表面点
+    # ==========================================================================
+
+    @staticmethod
+    def _extract_core_points(obj_points, cls_id, bbox, uv, valid_proj, lidar):
+        """中点垂直切片 + DBSCAN 聚类 → 只保留主物体核心表面点.
+
+        动机: 2D bbox 内常混入地面/背景点, 均值会严重偏移.
+        中部 40% 区域对应物体中心剖面, 点几乎全来自物体表面.
+        DBSCAN 进一步剔除投影误差混入的边缘离群点.
+        """
+        if bbox is None or uv is None or valid_proj is None or lidar is None:
+            return None
+
+        x1, y1, x2, y2 = bbox.astype(int)
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        crop_w = int((x2 - x1) * 0.4)
+        crop_h = int((y2 - y1) * 0.4)
+
+        if crop_w < 3 or crop_h < 3:
+            return None
+
+        mid_mask = (
+            (uv[:, 0] >= cx - crop_w / 2) & (uv[:, 0] <= cx + crop_w / 2) &
+            (uv[:, 1] >= cy - crop_h / 2) & (uv[:, 1] <= cy + crop_h / 2)
+        )
+        core_lidar = lidar[mid_mask & valid_proj]
+        if len(core_lidar) < 5:
+            return None
+
+        core_xyz = core_lidar[:, :3].astype(np.float32)
+
+        # 按类别自适应 DBSCAN
+        if cls_id == 0:              # person: 点极少
+            eps, min_samples = 0.2, 3
+        elif cls_id in (5, 7):       # bus / truck: 巨大物体
+            eps, min_samples = 0.8, 12
+        else:                        # car, bicycle, etc.
+            eps, min_samples = 0.5, 8
+
+        clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(core_xyz)
+
+        labels = clustering.labels_
+        valid_labels = labels[labels >= 0]
+        if len(valid_labels) == 0:
+            return None
+
+        # 取点数最多的簇 (主物体)
+        main_label = np.bincount(valid_labels).argmax()
+        return core_xyz[labels == main_label]
+
+    # ==========================================================================
     # 训练目标构建: GT + noise → residual
     # ==========================================================================
 
-    def _build_target(self, obj_points, ann, sample_token):
+    def _build_target(self, obj_points, ann, sample_token,
+                       cls_id=None, bbox=None, uv=None, valid_proj=None, lidar=None):
         """构建训练样本: 用点云统计量或 GT+噪声 作为初始框, 计算残差作为回归目标.
 
         两种模式 (随机切换, 消除训练/推理 domain gap):
-          A. 点云初始化 (pc_init):  point cloud mean/PCA → 模拟推理时无 GT 的场景
-          B. GT 加噪声 (gt_noise):   GT + small noise → 模拟有 GT 匹配的推理场景
+          A. 点云初始化 (pc_init):  mid-slice + DBSCAN → core points → mean/PCA
+          B. GT 加噪声 (gt_noise):  GT + small noise
 
         流程:
           1. GT 从 global → ego 坐标系 (与 LiDAR 一致)
@@ -418,13 +474,16 @@ class Phase2Dataset(Dataset):
             gt_yaw = gt_yaw - ego_yaw
 
         if use_pc_init and len(obj_points) >= 20:
-            # 点云初始化: center=GT+大噪声(±1m), yaw=PCA → 模拟无 GT 的推理场景
-            # center 使用 GT+噪声而非点云均值: 避免 LiDAR/ego 坐标帧不匹配
-            noisy_center = gt_center + rng.normal(0, self.PC_CENTER_NOISE, 3).astype(np.float32)
+            # 点云初始化: mid-slice + DBSCAN → 核心表面点 → mean/PCA
+            core_xyz = self._extract_core_points(obj_points, cls_id, bbox, uv, valid_proj, lidar)
+            if core_xyz is not None and len(core_xyz) >= 5:
+                obj_xyz = core_xyz
+            else:
+                obj_xyz = obj_points[:, :3].astype(np.float32)
+            noisy_center = obj_xyz.mean(axis=0)
 
             # PCA 估计朝向
-            obj_xyz = obj_points[:, :3].astype(np.float32)
-            centered_xy = obj_xyz[:, :2] - obj_xyz[:, :2].mean(axis=0)
+            centered_xy = obj_xyz[:, :2] - noisy_center[:2]
             cov = centered_xy.T @ centered_xy / len(centered_xy)
             eigvals, eigvecs = np.linalg.eigh(cov)
             principal = eigvecs[:, -1]
