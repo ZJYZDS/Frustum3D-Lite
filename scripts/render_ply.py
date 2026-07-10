@@ -76,12 +76,17 @@ def render_ply(ply_path, out_path, elev=25, azim=-60):
     ax.scatter(pts[bbox_mask, 0], pts[bbox_mask, 1], pts[bbox_mask, 2],
                c=colors[bbox_mask], s=4.0, alpha=1.0)
 
-    # 自动缩放
-    mid = pts.mean(axis=0)
-    half_span = max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), np.ptp(pts[:, 2])) / 2 + 5
-    ax.set_xlim(mid[0] - half_span, mid[0] + half_span)
-    ax.set_ylim(mid[1] - half_span, mid[1] + half_span)
-    ax.set_zlim(mid[2] - half_span, mid[2] + half_span)
+    # 自动缩放: 以 bbox 区域为中心, 紧贴物体
+    if bbox_mask.any():
+        mid = pts[bbox_mask].mean(axis=0)
+        span = max(np.ptp(pts[bbox_mask][:, 0]), np.ptp(pts[bbox_mask][:, 1]),
+                   np.ptp(pts[bbox_mask][:, 2])) / 2 + 8
+    else:
+        mid = pts.mean(axis=0)
+        span = max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), np.ptp(pts[:, 2])) / 2 + 5
+    ax.set_xlim(mid[0] - span, mid[0] + span)
+    ax.set_ylim(mid[1] - span, mid[1] + span)
+    ax.set_zlim(mid[2] - span, mid[2] + span)
 
     ax.view_init(elev=elev, azim=azim)
     ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")

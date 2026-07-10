@@ -49,17 +49,17 @@ CAM_FRONT (1600×900) + LIDAR_TOP (N×5)
 |:---:|:---:|:---:|
 | ![cam_01](display/frame_01_cam.jpg) | ![3d_01](display/frame_01_persp.png) | ![top_01](display/frame_01_top.png) |
 
-### Frame 03 (两轿车 + 行人)
+### Frame 02 (两轿车 + 行人)
+
+| 2D 检测 (CAM_FRONT) | 3D 点云 + bbox (透视图) | 3D 俯视图 |
+|:---:|:---:|:---:|
+| ![cam_02](display/frame_02_cam.jpg) | ![3d_02](display/frame_02_persp.png) | ![top_02](display/frame_02_top.png) |
+
+### Frame 03 (巴士 + 轿车)
 
 | 2D 检测 (CAM_FRONT) | 3D 点云 + bbox (透视图) | 3D 俯视图 |
 |:---:|:---:|:---:|
 | ![cam_03](display/frame_03_cam.jpg) | ![3d_03](display/frame_03_persp.png) | ![top_03](display/frame_03_top.png) |
-
-### Frame 04 (巴士 + 轿车)
-
-| 2D 检测 (CAM_FRONT) | 3D 点云 + bbox (透视图) | 3D 俯视图 |
-|:---:|:---:|:---:|
-| ![cam_04](display/frame_04_cam.jpg) | ![3d_04](display/frame_04_persp.png) | ![top_04](display/frame_04_top.png) |
 
 > 每个物体的局部 PLY 见 `display/frame_XX/obj_*.ply`, 用 CloudCompare 打开即可自动对焦到该物体。
 
