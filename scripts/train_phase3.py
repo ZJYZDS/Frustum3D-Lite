@@ -52,7 +52,8 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch):
         optimizer.zero_grad()
         pred = model(points=points, class_ids=cids,
                      face_cov=batch.get('face_cov'),
-                     max_face_idx=batch.get('max_face_idx'))
+                     max_face_idx=batch.get('max_face_idx'),
+                     bbox_feat=batch.get('bbox_feat'))
         loss, d = criterion(pred, target, class_ids=cids)
         loss.backward(); optimizer.step()
 
@@ -93,7 +94,8 @@ def validate(model, loader, criterion, device, epoch, detail=False):
 
         pred = model(points=points, class_ids=cids,
                      face_cov=batch.get('face_cov'),
-                     max_face_idx=batch.get('max_face_idx'))
+                     max_face_idx=batch.get('max_face_idx'),
+                     bbox_feat=batch.get('bbox_feat'))
         _, d = criterion(pred, target, class_ids=cids)
         cents = points.mean(dim=1)
         pr = model.prior_table[cids] if cids is not None else \

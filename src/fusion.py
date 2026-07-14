@@ -74,7 +74,7 @@ class PointNet3DDetector(nn.Module):
     }
     DEFAULT_PRIOR = [1.90, 4.60, 1.50]
 
-    def __init__(self, hidden_dim=64, num_classes=10,
+    def __init__(self, hidden_dim=96, num_classes=10,
                  **_unused_kwargs):
         super().__init__()
 
@@ -117,7 +117,13 @@ class PointNet3DDetector(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        fusion_dim = 128 + 16 + 16 + 16 + 16 + 16  # backbone + prior + centroid + extent + viewdir + face
+        # YOLO bbox geometry: bw, bh, aspect, area → camera-space prior
+        self.bbox_encoder = nn.Sequential(
+            nn.Linear(4, 12),
+            nn.ReLU(inplace=True),
+        )
+
+        fusion_dim = 128 + 16 + 16 + 16 + 16 + 16 + 12  # +bbox_feat
 
         self.center_head = nn.Sequential(
             nn.Linear(fusion_dim, hidden_dim*2), nn.ReLU(inplace=True),
@@ -142,7 +148,7 @@ class PointNet3DDetector(nn.Module):
         nn.init.zeros_(self.yaw_head[-1].bias)
 
     def forward(self, points, class_ids=None, centroids=None,
-                face_cov=None, max_face_idx=None, **_unused_kwargs):
+                face_cov=None, max_face_idx=None, bbox_feat=None, **_unused_kwargs):
         """
         Args:
             points: (B, N, 3)  LiDAR 点云
@@ -197,8 +203,14 @@ class PointNet3DDetector(nn.Module):
         else:
             face_feat = torch.zeros(B, 16, device=points.device)
 
+        # YOLO bbox geometry features
+        if bbox_feat is not None:
+            bbox_f = self.bbox_encoder(bbox_feat.to(points.device))  # (B, 12)
+        else:
+            bbox_f = torch.zeros(B, 12, device=points.device)
+
         fused = torch.cat([feat, prior_feat, cent_feat,
-                           extent_feat, viewdir_feat, face_feat], dim=-1)  # (B, 208)
+                           extent_feat, viewdir_feat, face_feat, bbox_f], dim=-1)  # (B, 220)
 
         d_center = self.center_head(fused)                     # (B, 3)
         d_size = self.size_head(fused)                         # (B, 3)
