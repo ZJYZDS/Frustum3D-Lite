@@ -73,14 +73,14 @@ for di in range(min(2, len(ds.frames))):
         cam_data[cam] = (K, T, img, dets, pf)
         all_dets.extend(pf)
 
-    # Cross-camera dedup: same class + XY < 1.5m → same object
+    # Global dedup: same class + XY < 3.0m → same object (keep best pts)
     all_dets.sort(key=lambda p: -p['num_pts'])
     all_dets_dedup = []
     for p in all_dets:
         c = p['center']; cid = p['class_id']
         dup = False
         for ep in all_dets_dedup:
-            if cid == ep['class_id'] and np.linalg.norm(c[:2] - ep['center'][:2]) < 1.5:
+            if cid == ep['class_id'] and np.linalg.norm(c[:2] - ep['center'][:2]) < 3.0:
                 dup = True; break
         if not dup: all_dets_dedup.append(p)
 
