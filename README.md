@@ -22,11 +22,11 @@
 |:---:|:---:|
 | ![f05cam](docs/images/frame05_cam.jpg) | ![f05top](docs/images/frame05_top.png) |
 
-### Frame 07 — 8 物体 (多辆轿车)
+### Frame 01 — 3 物体 (轿车, 近距 + 远距)
 
 | 2D 检测 | LiDAR 俯视图 |
 |:---:|:---:|
-| ![f07cam](docs/images/frame07_cam.jpg) | ![f07top](docs/images/frame07_top.png) |
+| ![f01cam](docs/images/frame01_cam.jpg) | ![f01top](docs/images/frame01_top.png) |
 
 > CloudCompare/Meshlab 打开 `docs/images/frame03.ply` / `frame05.ply` / `frame07.ply` 交互查看. 更多: `display/test_gt/`.
 
