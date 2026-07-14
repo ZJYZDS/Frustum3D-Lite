@@ -8,27 +8,27 @@
 
 ## 效果 (Test Set, GT-bbox 管线)
 
-> 图例: 金色点 = CAM_FRONT 视锥内 LiDAR 点, 深灰 = 视锥外, 彩色粗框 = 模型预测 3D BBox, 箭头 = 朝向.
+> 图例: 金色 = CAM_FRONT 视锥内 LiDAR, 深灰 = 视锥外, 彩色粗框 = 模型 3D BBox, 箭头 = 朝向.
 
 ### Frame 03 — 9 物体 (行人 + 轿车 + 卡车)
 
-| 2D 检测 (YOLO + 3D BBox 投影) | LiDAR 俯视图 |
+| 2D 检测 (YOLO + 3D BBox) | LiDAR 俯视图 |
 |:---:|:---:|
-| ![cam03](docs/images/test_cam.jpg) | ![top03](docs/images/test_top.png) |
+| ![f03cam](docs/images/frame03_cam.jpg) | ![f03top](docs/images/frame03_top.png) |
 
 ### Frame 05 — 8 物体 (多辆轿车)
 
 | 2D 检测 | LiDAR 俯视图 |
 |:---:|:---:|
-| ![cam05](docs/images/test05_cam.jpg) | ![top05](docs/images/test05_top.png) |
+| ![f05cam](docs/images/frame05_cam.jpg) | ![f05top](docs/images/frame05_top.png) |
 
 ### Frame 07 — 8 物体 (多辆轿车)
 
 | 2D 检测 | LiDAR 俯视图 |
 |:---:|:---:|
-| ![cam07](docs/images/test07_cam.jpg) | ![top07](docs/images/test07_top.png) |
+| ![f07cam](docs/images/frame07_cam.jpg) | ![f07top](docs/images/frame07_top.png) |
 
-> 用 CloudCompare / Meshlab 打开 `docs/images/test.ply` / `test05.ply` / `test07.ply` 可交互查看 3D BBox 线框. 更多帧: `display/test_gt/`.
+> CloudCompare/Meshlab 打开 `docs/images/frame03.ply` / `frame05.ply` / `frame07.ply` 交互查看. 更多: `display/test_gt/`.
 
 ## Phase 3 (当前主线)
 
