@@ -6,29 +6,19 @@
 **输出**: 每个检测物体的 3D bbox — 中心 (cx, cy, cz)、尺寸 (w, l, h)、朝向 (yaw)
 **数据集**: nuScenes v1.0-mini
 
-## 效果 (Test Set, GT-bbox 管线)
+## 效果 (360° 多相机 + LiDAR, Test Frame 02 — 24 物体)
 
-> 图例: 金色 = CAM_FRONT 视锥内 LiDAR, 深灰 = 视锥外, 彩色粗框 = 模型 3D BBox, 箭头 = 朝向.
+> 6 相机 YOLO 检测 + LiDAR 全景 3D BBox. 彩色粗框 = 模型预测, 箭头 = 朝向.
 
-### Frame 03 — 9 物体 (行人 + 轿车 + 卡车)
+### 360° LiDAR 俯视图 (全方向 50m)
 
-| 2D 检测 (YOLO + 3D BBox) | LiDAR 俯视图 |
-|:---:|:---:|
-| ![f03cam](docs/images/frame03_cam.jpg) | ![f03top](docs/images/frame03_top.png) |
+![360top](docs/images/frame02_360top.png)
 
-### Frame 05 — 8 物体 (多辆轿车)
+### 6 相机 YOLO 检测 + 3D BBox 投影
 
-| 2D 检测 | LiDAR 俯视图 |
-|:---:|:---:|
-| ![f05cam](docs/images/frame05_cam.jpg) | ![f05top](docs/images/frame05_top.png) |
+![cams](docs/images/frame02_cams.jpg)
 
-### Frame 01 — 3 物体 (轿车, 近距 + 远距)
-
-| 2D 检测 | LiDAR 俯视图 |
-|:---:|:---:|
-| ![f01cam](docs/images/frame01_cam.jpg) | ![f01top](docs/images/frame01_top.png) |
-
-> CloudCompare/Meshlab 打开 `docs/images/frame03.ply` / `frame05.ply` / `frame07.ply` 交互查看. 更多: `display/test_gt/`.
+> CloudCompare/Meshlab 打开 `docs/images/frame02.ply` 交互查看 360° 全部 BBox 线框. 更多: `display/360/`.
 
 ## Phase 3 (当前主线)
 
