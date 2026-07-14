@@ -19,31 +19,21 @@ import numpy as np
 import onnxruntime as ort
 
 
-# COCO 80 类名 (索引 0-79)
-COCO_CLASSES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep",
-    "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
-    "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
-    "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
-    "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork",
-    "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
-    "couch", "potted plant", "bed", "dining table", "toilet", "tv",
-    "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
-    "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
-    "scissors", "teddy bear", "hair drier", "toothbrush",
+# 微调模型 10 类
+FINETUNE_CLASSES = [
+    "pedestrian", "rider", "car", "truck", "bus", "train",
+    "motorcycle", "bicycle", "traffic light", "traffic sign",
 ]
 
-# nuScenes 中关注的障碍物类别 (COCO 索引 → 是否为行人)
+# 3D 检测关心的障碍物类别 (微调模型类索引)
 OBSTACLE_CLASSES = {
-    0:  ("person",     True),     # 行人: 最高优先级
-    1:  ("bicycle",    False),
-    2:  ("car",        False),
-    3:  ("motorcycle", False),
-    5:  ("bus",        False),
-    7:  ("truck",      False),
+    0:  ("pedestrian",  True),     # 行人
+    1:  ("rider",       True),     # 骑行者 → 按行人处理
+    2:  ("car",         False),
+    3:  ("truck",       False),
+    4:  ("bus",         False),
+    6:  ("motorcycle",  False),
+    7:  ("bicycle",     False),
 }
 OBSTACLE_CLASS_IDS = set(OBSTACLE_CLASSES.keys())
 
@@ -155,14 +145,14 @@ class YOLODetectONNX:
         results = []
         for i in range(len(preds)):
             cls_id = int(preds[i, 5])
-            if cls_id >= len(COCO_CLASSES):
+            if cls_id >= len(FINETUNE_CLASSES):
                 continue
             results.append({
                 "class_id": cls_id,
-                "class_name": COCO_CLASSES[cls_id],
+                "class_name": FINETUNE_CLASSES[cls_id],
                 "confidence": float(preds[i, 4]),
                 "bbox": boxes[i].astype(np.float32),    # (4,) xyxy
-                "is_person": cls_id == 0,
+                "is_person": cls_id in (0, 1),
             })
 
         return results
@@ -398,8 +388,63 @@ def export_onnx(model_name="yolov8s-seg", imgsz=640, output_dir="models"):
     return onnx_path
 
 
+# ==============================================================================
+# YOLOPtDetector: ultralytics .pt 模型包装器 (支持微调模型)
+# ==============================================================================
+
+class YOLOPtDetector:
+    """用 ultralytics 直接加载 .pt 模型做推理.
+
+    输出格式与 YOLODetectONNX 一致, 可直接替换.
+    """
+
+    def __init__(self, pt_path, conf_thresh=0.5, imgsz=640, device='cuda'):
+        from ultralytics import YOLO
+        self.model = YOLO(pt_path)
+        self.conf = conf_thresh
+        self.imgsz = imgsz
+        self.device = device
+        # 从模型读取类别名
+        if hasattr(self.model.model, 'names'):
+            self.class_names = self.model.model.names
+        else:
+            self.class_names = FINETUNE_CLASSES
+        print(f"[YOLOPtDetector] Loaded {pt_path}")
+        print(f"  Classes: {self.class_names}")
+
+    def predict(self, img_bgr):
+        """Returns: list[dict] 同 YOLODetectONNX.predict 格式."""
+        h0, w0 = img_bgr.shape[:2]
+        results = self.model(img_bgr, conf=self.conf, imgsz=self.imgsz,
+                             device=self.device, verbose=False)
+
+        dets = []
+        if len(results) == 0:
+            return dets
+
+        r = results[0]
+        if r.boxes is None:
+            return dets
+
+        boxes_xyxy = r.boxes.xyxy.cpu().numpy()
+        confs = r.boxes.conf.cpu().numpy()
+        cls_ids = r.boxes.cls.cpu().numpy().astype(int)
+
+        for i in range(len(boxes_xyxy)):
+            cls_id = cls_ids[i]
+            dets.append({
+                "class_id": cls_id,
+                "class_name": self.class_names.get(cls_id, f"cls_{cls_id}"),
+                "confidence": float(confs[i]),
+                "bbox": boxes_xyxy[i].astype(np.float32),
+                "is_person": cls_id in (0, 1),
+            })
+
+        return dets
+
+
 if __name__ == "__main__":
-    # 烟雾测试: 导出分割模型并跑一次推理
+    # 烟雾测试
     onnx_path = export_onnx("yolov8s-seg", imgsz=640, output_dir="models")
     detector = YOLOSegONNX(onnx_path, conf_thresh=0.3)
     dummy = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)

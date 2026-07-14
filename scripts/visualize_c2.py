@@ -16,13 +16,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from sklearn.cluster import DBSCAN
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.dataset_phase1 import (LiDARProjector, quaternion_to_yaw, quaternion_to_mat,
                                  rotate_points_z)
-from src.detector import YOLODetectONNX, OBSTACLE_CLASS_IDS, OBSTACLE_CLASSES
+from src.detector import YOLOSegONNX, OBSTACLE_CLASS_IDS, OBSTACLE_CLASSES
+from src.init_estimator import estimate_yaw_pca, filter_points_by_mask
+from src.fusion import COCO_CLS_TO_GROUP
 from src.model import farthest_point_sample
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,6 +39,14 @@ DEFAULT_SIZE = {
     3: (0.8, 2.2, 1.5),   # motorcycle
     5: (2.8, 10.0, 3.0),  # bus
     7: (2.8, 7.0, 2.5),   # truck
+}
+CLS_AVG_SIZE = {
+    0: np.array([0.7, 0.7, 1.75], dtype=np.float32),   # person
+    1: np.array([0.5, 1.8, 1.2], dtype=np.float32),    # bicycle
+    2: np.array([2.0, 4.5, 1.6], dtype=np.float32),    # car
+    3: np.array([0.8, 2.2, 1.5], dtype=np.float32),    # motorcycle
+    5: np.array([2.8, 10.0, 3.0], dtype=np.float32),   # bus
+    7: np.array([2.8, 7.0, 2.5], dtype=np.float32),    # truck
 }
 NUM_FRAMES = 4
 MANUAL_SEED = 42
@@ -67,43 +76,6 @@ def bbox_edges_as_points(center, size, yaw, n_pts=EDGE_PTS_PER_BBOX):
         t = np.linspace(0, 1, pts_per_edge)
         all_pts.append(corners[i] + t[:, None] * (corners[j] - corners[i]))
     return np.vstack(all_pts).astype(np.float32)
-
-
-def extract_core_points(obj_pts, cls_id, bbox, uv, valid_proj, lidar_full, in_bbox_mask):
-    """中点垂直切片 + DBSCAN → 提取目标核心表面点 (与训练时 _extract_core_points 一致)."""
-    x1, y1, x2, y2 = bbox.astype(int)
-    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-    crop_w = int((x2 - x1) * 0.4)
-    crop_h = int((y2 - y1) * 0.4)
-
-    if crop_w < 3 or crop_h < 3:
-        return None
-
-    mid_mask = (
-        (uv[:, 0] >= cx - crop_w / 2) & (uv[:, 0] <= cx + crop_w / 2) &
-        (uv[:, 1] >= cy - crop_h / 2) & (uv[:, 1] <= cy + crop_h / 2)
-    )
-    core_pts = lidar_full[mid_mask & valid_proj]
-    if len(core_pts) < 5:
-        return None
-
-    core_xyz = core_pts[:, :3].astype(np.float32)
-
-    if cls_id == 0:
-        eps, min_samples = 0.2, 3
-    elif cls_id in (5, 7):
-        eps, min_samples = 0.8, 12
-    else:
-        eps, min_samples = 0.5, 8
-
-    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(core_xyz)
-    labels = clustering.labels_
-    valid_labels = labels[labels >= 0]
-    if len(valid_labels) == 0:
-        return None
-
-    main_label = np.bincount(valid_labels).argmax()
-    return core_xyz[labels == main_label]
 
 
 def save_ply(path, points_list, color_list):
@@ -222,14 +194,19 @@ def main():
         sensor = sd["filename"].split("/")[1]
         frame_sensors.setdefault(sd["sample_token"], {})[sensor] = sd["token"]
 
+    from src.dataset_phase2 import Phase2Dataset
+    val_ds = Phase2Dataset(DATA_ROOT, split='val')
+    val_frame_set = val_ds._frames
+    del val_ds
+
     valid_frames = []
     for tok, sensors in frame_sensors.items():
-        if "CAM_FRONT" in sensors and "LIDAR_TOP" in sensors:
+        if "CAM_FRONT" in sensors and "LIDAR_TOP" in sensors and tok in val_frame_set:
             valid_frames.append(tok)
     valid_frames.sort()
 
-    print(f"有效帧: {len(valid_frames)}, 使用前 {NUM_FRAMES} 帧")
-    detector = YOLODetectONNX("models/yolo26s.onnx", conf_thresh=0.5)
+    print(f"有效 val 帧: {len(valid_frames)}, 使用前 {NUM_FRAMES} 帧")
+    detector = YOLOSegONNX("models/yolov8s-seg.onnx", conf_thresh=0.5)
     projector = LiDARProjector(DATA_ROOT)
     total_objs = 0
     display_idx = 0
@@ -244,7 +221,7 @@ def main():
         lidar_full = np.fromfile(
             os.path.join(DATA_ROOT, sample_data[lidar_token]["filename"]),
             dtype=np.float32).reshape(-1, 5)
-        lidar_xyz = lidar_full[:, :3]   # LiDAR 坐标系 (≈ego)
+        lidar_xyz = lidar_full[:, :3]   # LiDAR 坐标系
 
         K, T_lidar2cam, img_shape = projector.get_transform(sample_token)
         if K is None:
@@ -252,15 +229,18 @@ def main():
 
         uv, depth, valid_proj = projector.project(lidar_full, K, T_lidar2cam, img_shape)
 
-        # ---- LiDAR → ego 坐标变换 ----
+        # ---- LiDAR → ego 坐标变换 (用于显示) ----
         lidar_calib_token = projector._sample_sensor_calib.get(sample_token, {}).get("LIDAR_TOP")
         if lidar_calib_token:
             lidar_calib = projector.calibs[lidar_calib_token]
             R_lidar2ego = quaternion_to_mat(*lidar_calib["rotation"])
             t_lidar2ego = np.array(lidar_calib["translation"], dtype=np.float32)
-            # pt_ego = R @ pt_lidar + t
+            lidar_yaw = quaternion_to_yaw(*lidar_calib["rotation"])
             lidar_xyz_ego = (R_lidar2ego @ lidar_xyz.T).T + t_lidar2ego
         else:
+            R_lidar2ego = np.eye(3, dtype=np.float32)
+            t_lidar2ego = np.zeros(3, dtype=np.float32)
+            lidar_yaw = 0.0
             lidar_xyz_ego = lidar_xyz
 
         dets = detector.predict(img)
@@ -307,16 +287,12 @@ def main():
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            margin = 5
-            in_bbox = (
-                valid_proj
-                & (uv[:, 0] >= x1 - margin) & (uv[:, 0] <= x2 + margin)
-                & (uv[:, 1] >= y1 - margin) & (uv[:, 1] <= y2 + margin)
-                & (depth > 0.5)
-            )
-            obj_pts = lidar_full[in_bbox]
-            if len(obj_pts) < 10:
+            # ---- LiDAR 点: YOLO-seg mask 过滤 (dilate=10 补偿投影对齐) ----
+            obj_pts = filter_points_by_mask(uv, valid_proj, depth, det["mask"], lidar_full, dilate=10)
+            if obj_pts is None or len(obj_pts) < 10:
                 continue
+
+            class_group = COCO_CLS_TO_GROUP.get(det["class_id"], "medium")
 
             best_ann = match_gt_2d(det["bbox"], gt_anns, K, sample_token,
                                    frame_ego, ego_poses, projector)
@@ -326,61 +302,45 @@ def main():
             R_ego = quaternion_to_mat(*ego_pose["rotation"])
             t_ego = np.array(ego_pose["translation"], dtype=np.float32)
 
-            # LiDAR calibration (用于 LiDAR↔ego 坐标转换)
-            lidar_yaw = quaternion_to_yaw(*lidar_calib["rotation"]) if lidar_calib_token else 0.0
+            # ---- Visible centroid (z-bottom 35%): 训练/推理完全一致 ----
+            obj_xyz = obj_pts[:, :3].astype(np.float32)
+            z_vals = obj_xyz[:, 2]
+            z_cut = z_vals.min() + (z_vals.max() - z_vals.min()) * 0.35
+            bottom_mask = z_vals <= z_cut
+            if bottom_mask.sum() >= 3:
+                visible_centroid_lidar = obj_xyz[bottom_mask].mean(axis=0)
+            else:
+                visible_centroid_lidar = obj_xyz.mean(axis=0)
 
             if has_gt:
                 cat_name = inst2cat.get(best_ann["instance_token"], "unknown")
-                # GT 在 ego 帧 (用于显示)
                 gt_center_ego = R_ego.T @ (np.array(best_ann["translation"], dtype=np.float32) - t_ego)
                 gt_size = np.array(best_ann["size"], dtype=np.float32)
                 gt_yaw_ego = quaternion_to_yaw(*best_ann["rotation"]) - quaternion_to_yaw(*ego_pose["rotation"])
 
-                # noisy 初始值在 ego 帧 (显示用)
-                noisy_center_ego = gt_center_ego + rng.normal(0, 0.3, 3).astype(np.float32)
+                # noisy 初始值 = visible centroid (与训练一致)
+                noisy_center_lidar = visible_centroid_lidar
                 noisy_size = gt_size + rng.normal(0, 0.15, 3).astype(np.float32)
                 noisy_size = np.clip(noisy_size, 0.3, 20.0)
                 noisy_yaw_ego = gt_yaw_ego + math.radians(rng.normal(0, 5.0))
-
-                # 模型在 LiDAR 帧工作 → 转换 noisy 到 LiDAR 帧
-                noisy_center_lidar = R_lidar2ego.T @ (noisy_center_ego - t_lidar2ego)
                 noisy_yaw_lidar = noisy_yaw_ego - lidar_yaw
                 gt_center_lidar = R_lidar2ego.T @ (gt_center_ego - t_lidar2ego)
             else:
                 cls_id = det["class_id"]
-                obj_xyz_all = obj_pts[:, :3]
-                core_xyz = extract_core_points(
-                    obj_pts, cls_id, det["bbox"],
-                    uv, valid_proj, lidar_full, in_bbox)
-                if core_xyz is not None and len(core_xyz) >= 5:
-                    obj_xyz = core_xyz
-                else:
-                    obj_xyz = obj_xyz_all
-                obj_mean = obj_xyz.mean(axis=0)
+                cat_name = OBSTACLE_CLASSES.get(cls_id, ("unknown",))[0]
 
-                # 模型在 LiDAR 帧工作
-                noisy_center_lidar = obj_mean.astype(np.float32)
-                noisy_size = np.array(
-                    DEFAULT_SIZE.get(cls_id, (2.0, 4.5, 1.6)),
-                    dtype=np.float32)
-
-                # PCA 估计初始 yaw (LiDAR 帧, xy 平面主方向)
-                centered = obj_xyz[:, :2] - obj_mean[:2]
-                cov = centered.T @ centered / len(centered)
-                eigvals, eigvecs = np.linalg.eigh(cov)
-                principal = eigvecs[:, -1]
-                pca_yaw = math.atan2(principal[1], principal[0])
-                pca_yaw = math.atan2(math.sin(pca_yaw), math.cos(pca_yaw))
-                if abs(pca_yaw) > math.pi / 2:
-                    pca_yaw -= math.copysign(math.pi, pca_yaw)
-                noisy_yaw_lidar = float(pca_yaw)
-
-                # ego 帧 (显示用)
-                noisy_center_ego = (R_lidar2ego @ noisy_center_lidar.reshape(3, 1)).reshape(3) + t_lidar2ego
-                noisy_yaw_ego = noisy_yaw_lidar + lidar_yaw
+                noisy_center_lidar = visible_centroid_lidar
+                noisy_size = np.array(DEFAULT_SIZE.get(cls_id, (2.0, 4.5, 1.6)),
+                                      dtype=np.float32)
+                pca_yaw, _ = estimate_yaw_pca(obj_xyz)
+                noisy_yaw_lidar = pca_yaw
                 gt_center_ego = None
                 gt_center_lidar = None
-                cat_name = OBSTACLE_CLASSES.get(cls_id, ("unknown",))[0]
+
+            # ego 帧 (显示用)
+            noisy_center_ego = (R_lidar2ego @ noisy_center_lidar.reshape(3, 1)).reshape(3) + t_lidar2ego
+            if not has_gt:
+                noisy_yaw_ego = noisy_yaw_lidar + lidar_yaw
 
             # ---- C2 推理 (LiDAR 帧, 与训练一致) ----
             local_xyz = obj_pts[:, :3].astype(np.float32) - noisy_center_lidar
@@ -409,7 +369,7 @@ def main():
             point_feats = np.concatenate([local_xyz_norm, intensity, scale_feat], axis=1)
             inp = torch.from_numpy(point_feats).unsqueeze(0).float().to(DEVICE)
             with torch.no_grad():
-                residual = model(None, inp)[0].cpu().numpy()
+                residual = model(None, inp, class_groups=[class_group])[0].cpu().numpy()
 
             # 预测结果从 LiDAR 帧转回 ego 帧 (用于显示)
             pred_center_lidar = noisy_center_lidar + residual[:3]

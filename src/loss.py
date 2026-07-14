@@ -1,59 +1,84 @@
 """
-损失函数: SmoothL1 (center, size) + MSE (yaw sin/cos).
-
-为什么 yaw 用 MSE 而不是 SmoothL1?
-  sin/cos 是归一化到 [-1, 1] 的有界值, 不需要 SmoothL1 的大误差截断.
-  MSE 对小偏差的梯度更平滑, 适合角度这种周期性小量.
-
-为什么 yaw 预测 (sin, cos) 而不是直接预测角度?
-  角度 0° 和 360° 是同一个方向, 但数值上差距很大.
-  (sin, cos) 编码天然处理了这个周期性, 且 atan2 恢复角度无歧义.
+损失函数: PointNet 3D 检测 — center 残差 + size 对数残差 + yaw 2θ.
 """
 
+import math
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-class BboxRefinementLoss(nn.Module):
-    """3D bbox 残差回归的组合损失.
+class PointNet3DLoss(nn.Module):
+    """三头联合损失.
 
-    损失 = center_weight * SmoothL1(dx,dy,dz)
-         + size_weight  * SmoothL1(dw,dh,dl)
-         + yaw_weight   * MSE(sin(dθ), cos(dθ))
-
-    权重默认 center=1.0, size=2.0, yaw=1.5.
-    size/yaw 高权重补偿其较小的数值量级, 防止 center 主导梯度.
+    - Center: SmoothL1(dx, dy, dz)  — 相对质心的残差
+    - Size:   MSE(δl, δw, δh)       — 相对先验的对数残差
+    - Yaw:    1 - cos(2Δθ)          — 2θ 表示自然消歧 180°
     """
 
-    def __init__(self, center_weight=1.0, size_weight=2.0, yaw_weight=1.5):
+    def __init__(self, center_w=2.0, size_w=0.3, yaw_w=0.3,
+                 center_scale=3.0, size_scale=5.0):
         super().__init__()
-        self.center_weight = center_weight
-        self.size_weight = size_weight
-        self.yaw_weight = yaw_weight
-        self.smooth_l1 = nn.SmoothL1Loss()
-        self.mse = nn.MSELoss()
+        self.center_w = center_w
+        self.size_w = size_w
+        self.yaw_w = yaw_w
+        self.center_scale = center_scale
+        self.size_scale = size_scale
 
-    def forward(self, pred, target):
-        """Args:
-            pred:   (B, 8)  [dx,dy,dz, dw,dh,dl, sin,cos]
-            target: (B, 8)  同上
+    def forward(self, pred, target, class_ids=None):
+        """
+        Args:
+            pred:   (B, 7) [dx, dy, dz, δl, δw, δh, cos2θ, sin2θ]
+            target: (B, 7) same format
+            class_ids: (B,) optional, pedestrian (0) / rider (1) skip yaw loss
         Returns:
             total_loss, {"loss": float, "center": float, "size": float, "yaw": float}
         """
-        loss_center = self.smooth_l1(pred[:, :3], target[:, :3])
-        loss_size = self.smooth_l1(pred[:, 3:6], target[:, 3:6])
+        # Center: SmoothL1 on residual
+        loss_center = F.smooth_l1_loss(pred[:, :3], target[:, :3])
 
-        # sin 和 cos 分别算 MSE, 让模型同时学角度值和象限
-        loss_yaw = (self.mse(pred[:, 6], target[:, 6])
-                    + self.mse(pred[:, 7], target[:, 7]))
+        # Size: MSE on log-residual
+        loss_size = F.mse_loss(pred[:, 3:6], target[:, 3:6])
 
-        total = (
-            self.center_weight * loss_center
-            + self.size_weight * loss_size
-            + self.yaw_weight * loss_yaw
-        )
+        # Yaw: 1 - cos(2Δθ), 先归一化到单位圆
+        u, v = pred[:, 6], pred[:, 7]
+        norm = torch.sqrt(u**2 + v**2 + 1e-8)
+        u, v = u / norm, v / norm
+        cos_2diff = u * target[:, 6] + v * target[:, 7]
+        loss_per_sample = 1.0 - cos_2diff  # (B,)
+
+        # 行人和骑行者几何上无方向信息, 跳过 yaw loss
+        if class_ids is not None:
+            mask = (class_ids != 0) & (class_ids != 1)  # skip pedestrian & rider
+            mask = mask.float()
+            if mask.sum() > 0:
+                loss_yaw = (loss_per_sample * mask).sum() / mask.sum()
+            else:
+                loss_yaw = loss_per_sample.mean() * 0.0  # all pedestrians → 0
+        else:
+            loss_yaw = loss_per_sample.mean()
+
+        total = (self.center_w * loss_center +
+                 self.size_w * loss_size +
+                 self.yaw_w * loss_yaw)
+
         return total, {
             "loss": total.item(),
             "center": loss_center.item(),
             "size": loss_size.item(),
             "yaw": loss_yaw.item(),
         }
+
+    def denormalize(self, pred, centroid, priors):
+        center = pred[:, :3] * self.center_scale + centroid
+        size = priors * torch.exp(pred[:, 3:6])
+        u, v = pred[:, 6], pred[:, 7]
+        norm = torch.sqrt(u**2 + v**2 + 1e-8)
+        yaw = 0.5 * torch.atan2(v / norm, u / norm)
+        yaw = torch.where(yaw < 0, yaw + math.pi, yaw)  # [0, π)
+        return center, size, yaw
+
+
+# 兼容
+BboxCenterSizeLoss = PointNet3DLoss
+BboxAbsoluteLoss = PointNet3DLoss

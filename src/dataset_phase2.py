@@ -1,23 +1,18 @@
 """
-Phase 2 数据集: YOLO 检测 → RGB crop + LiDAR 点云 → 训练样本.
+Phase 2 数据集: YOLO-seg 检测 → RGB crop + mask-filtered LiDAR → 训练样本.
 
 每个样本的生成流程:
-  1. 对一帧图像运行 YOLO → K 个 2D 检测框
+  1. 对一帧图像运行 YOLO-seg → K 个检测 (bbox + mask)
   2. 将 LiDAR 点云投影到图像平面
-  3. 对每个检测框:
-     a. 框内裁剪 RGB, resize 到 128×128
-     b. 框内提取 LiDAR 点 (带 5px margin)
-     c. 通过 2D 中心距离匹配 GT (投影 GT 3D 中心 → 比较与 bbox 中心的像素距离)
-     d. 对 GT 加噪声, 构建残差回归目标
-
-GT 匹配的关键设计:
-  - nuScenes 中 GT annotation 的 translation 是 global 坐标系
-  - 需要 global → ego → camera → image 的完整坐标变换链
-  - 用 2D 中心距离匹配 (而非 Phase 1 失败的 3D LiDAR 点均值匹配)
+  3. 对每个检测:
+     a. bbox 内裁剪 RGB, resize 到 128×128
+     b. YOLO-seg mask 过滤 LiDAR 点 (dilate=10 补偿投影对齐)
+     c. 通过 2D 中心距离匹配 GT
+     d. 构建 offset 目标: visible_centroid → volume_center
 
 训练目标:
-  - 模型学习从 noisy 初始值 → GT 的残差
-  - noise: center=0.3m, size=0.15m, yaw=5°
+  - Center: 学习可见表面质心 → 体积中心 offset (0–1.5m)
+  - Size/Yaw: GT + 小噪声残差
 """
 
 import json
@@ -32,7 +27,9 @@ from torch.utils.data import Dataset
 
 from src.dataset_phase1 import (LiDARProjector, quaternion_to_yaw, quaternion_to_mat,
                                   rotate_points_z)
-from src.detector import YOLODetectONNX, OBSTACLE_CLASS_IDS
+from src.detector import YOLOSegONNX, OBSTACLE_CLASS_IDS
+from src.fusion import COCO_CLS_TO_GROUP
+from src.init_estimator import filter_points_by_mask
 
 
 # nuScenes 类别名 → COCO 类别索引 (用于一致性检查)
@@ -50,25 +47,33 @@ COCO_VEHICLE_IDS = {1, 2, 3, 5, 7}
 class Phase2Dataset(Dataset):
     """Phase 2 数据集: 每帧返回多个 per-object 训练样本的列表.
 
-    __getitem__ 返回 list[(rgb_crop, lidar_pts, target)], 由 phase2_collate
+    __getitem__ 返回 list[(rgb_crop, lidar_pts, target, class_group)], 由 phase2_collate
     展开为 (B, ...) 的 batch.
     """
 
     # 默认超参数
-    MIN_LIDAR_PTS = 10        # bbox 内最少 LiDAR 点数, 否则跳过该检测
+    MIN_LIDAR_PTS = 10        # mask 内最少 LiDAR 点数, 否则跳过该检测
     NUM_POINTS = 256           # FPS 重采样后的点数
     CROP_SIZE = 128            # RGB crop resize 尺寸
-    BBOX_MARGIN = 0.3          # (未使用, 保留)
-    NOISE_CENTER = 0.3         # center 噪声标准差 (米)
-    NOISE_SIZE = 0.15          # size 噪声标准差 (米)
-    NOISE_YAW_DEG = 5.0        # yaw 噪声标准差 (度)
-    MAX_DELTA_CENTER = 2.0      # center 残差截断 (米)
+    NOISE_SIZE = 0.15          # size 噪声标准差 (米) — 好框
+    NOISE_YAW_DEG = 5.0        # yaw 噪声标准差 (度) — 好框
+    MAX_DELTA_CENTER = 2.0      # center offset 截断 (米): 可见表面→体积中心 ≤ 2m
     MAX_DELTA_SIZE = 1.0        # size 残差截断 (米)
-    MAX_DELTA_YAW_DEG = 20.0    # yaw 残差截断 (度)
+    MAX_DELTA_YAW_DEG = 45.0    # yaw 残差截断 (度)
     MATCH_MAX_DIST_PX = 80     # GT 匹配的最大 2D 中心距离 (像素)
 
+    # 各类别典型尺寸 (宽, 长, 高) — nuScenes 均值, 用于烂框默认值 + size_diff 计算
+    CLS_AVG_SIZE = {
+        "vehicle.car":        np.array([2.0, 4.5, 1.6], dtype=np.float32),
+        "vehicle.truck":      np.array([2.8, 7.0, 2.5], dtype=np.float32),
+        "vehicle.bus":        np.array([2.8, 10.0, 3.0], dtype=np.float32),
+        "vehicle.motorcycle": np.array([0.8, 2.2, 1.5], dtype=np.float32),
+        "vehicle.bicycle":    np.array([0.5, 1.8, 1.2], dtype=np.float32),
+        "human.pedestrian":   np.array([0.7, 0.7, 1.75], dtype=np.float32),
+    }
+
     def __init__(self, data_root, split="train", cfg=None,
-                 detector_path="models/yolo26s.onnx", return_category=False):
+                 detector_path="models/yolov8s-seg.onnx"):
         self.data_root = Path(data_root)
         self.split = split
         cfg = cfg or {}
@@ -76,16 +81,14 @@ class Phase2Dataset(Dataset):
         # 从 config 覆盖默认值
         self.num_points = cfg.get("num_points", self.NUM_POINTS)
         self.crop_size = cfg.get("crop_size", self.CROP_SIZE)
-        self.bbox_margin = cfg.get("bbox_margin", self.BBOX_MARGIN)
         self.match_max_dist = cfg.get("match_max_dist_px", self.MATCH_MAX_DIST_PX)
-        self.return_category = cfg.get("return_category", return_category)
         val_scene_ids = cfg.get("val_scene_ids", 2)
 
         print(f"[Phase2] Loading metadata...")
         self._load_metadata(data_root)
 
         print(f"[Phase2] Loading detector: {detector_path}")
-        self.detector = YOLODetectONNX(detector_path, conf_thresh=0.5)
+        self.detector = YOLOSegONNX(detector_path, conf_thresh=0.5)
 
         print(f"[Phase2] Loading projector...")
         self.projector = LiDARProjector(data_root)
@@ -247,10 +250,10 @@ class Phase2Dataset(Dataset):
         return len(self._frames)
 
     def __getitem__(self, idx):
-        """对一帧: YOLO 检测 → 对每个检测生成样本 → 返回样本列表.
+        """对一帧: YOLO-seg 检测 → 对每个检测生成样本 → 返回样本列表.
 
         Returns:
-            list[(rgb_crop, lidar_pts, target)] 或空列表 (无有效检测时)
+            list[(rgb_crop, lidar_pts, target, class_group)] 或空列表 (无有效检测时)
         """
         sample_token = self._frames[idx]
 
@@ -298,13 +301,13 @@ class Phase2Dataset(Dataset):
 
     def _process_detection(self, det, img, lidar, uv, depth, valid_proj,
                            gt_anns, K, T_lidar2cam, sample_token):
-        """处理一个 YOLO 检测 → (rgb_crop, lidar_pts, target).
+        """处理一个 YOLO-seg 检测 → (rgb_crop, lidar_pts, target, class_group).
 
         步骤:
           1. RGB crop: bbox 内裁剪 + resize 到 128×128
-          2. LiDAR 点提取: 投影在 bbox 内的 3D 点 (带 5px margin)
+          2. LiDAR 点提取: YOLO-seg mask 过滤 (dilate=10 补偿投影对齐)
           3. GT 匹配: 2D 中心距离最近匹配
-          4. 目标构建: 加噪声 → 残差
+          4. 目标构建: 可见表面质心 → volume center offset
         """
         x1, y1, x2, y2 = det["bbox"].astype(int)
         x1, y1 = max(0, x1), max(0, y1)
@@ -321,17 +324,9 @@ class Phase2Dataset(Dataset):
         rgb_crop = rgb_crop[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
         rgb_crop = torch.from_numpy(rgb_crop)
 
-        # ---- LiDAR 点在 bbox 内 ----
-        margin = 5   # 像素 margin: 补偿投影误差和 bbox 不精确
-        in_bbox = (
-            valid_proj &
-            (uv[:, 0] >= x1 - margin) & (uv[:, 0] <= x2 + margin) &
-            (uv[:, 1] >= y1 - margin) & (uv[:, 1] <= y2 + margin) &
-            (depth > 0.5)   # 过滤近处噪声点 (相机后方或太近)
-        )
-        obj_pts = lidar[in_bbox]
-
-        if len(obj_pts) < self.MIN_LIDAR_PTS:
+        # ---- LiDAR 点: YOLO-seg mask 过滤 (替代 bbox margin 裁剪) ----
+        obj_pts = filter_points_by_mask(uv, valid_proj, depth, det["mask"], lidar, dilate=10)
+        if obj_pts is None or len(obj_pts) < self.MIN_LIDAR_PTS:
             return None
 
         # ---- GT 匹配 (2D 中心距离) ----
@@ -340,12 +335,12 @@ class Phase2Dataset(Dataset):
             return None
 
         # ---- 构建训练目标 ----
-        lidar_features, target = self._build_target(obj_pts, matched_gt, sample_token)
+        cat_name = self._inst2cat_name.get(matched_gt["instance_token"], "unknown")
+        lidar_features, target = self._build_target(
+            obj_pts, matched_gt, sample_token, cat_name)
 
-        if self.return_category:
-            cat_name = self._inst2cat_name.get(matched_gt["instance_token"], "unknown")
-            return rgb_crop, lidar_features, target, cat_name
-        return rgb_crop, lidar_features, target
+        class_group = COCO_CLS_TO_GROUP.get(det["class_id"], "medium")
+        return rgb_crop, lidar_features, target, class_group
 
     # ==========================================================================
     # GT 匹配: 2D 中心距离
@@ -397,20 +392,20 @@ class Phase2Dataset(Dataset):
     # 训练目标构建: GT + noise → residual
     # ==========================================================================
 
-    def _build_target(self, obj_points, ann, sample_token):
-        """构建训练样本: GT+噪声作为初始框, 计算残差作为回归目标.
+    def _build_target(self, obj_points, ann, sample_token, cat_name="unknown"):
+        """构建训练目标: 可见表面质心 → 体积中心 offset.
 
-        流程:
-          1. GT 从 global → LiDAR 坐标系 (与 obj_points 统一, 消除 domain gap)
-          2. 生成 noisy center/size/yaw
-          3. 点云去中心化 + 旋转对齐 noisy 朝向
-          4. 按物体物理范围归一化坐标 (使 SA 半径自适应物体尺度)
-          5. FPS 重采样到固定点数 (256)
-          6. 目标 = [Δcenter, Δsize, sin(Δyaw), cos(Δyaw)]
+        核心思路 (Spatial Mapper):
+          - noisy_center = visible_centroid (z-bottom 35% mean): 传感器测到的真实位置
+          - target = GT_center - visible_centroid: 网络学习"可见表面到体积中心的偏移"
+          - 训练/推理使用完全相同的初始化, 无 distribution shift
+          - Offset 范围 0–1.5m (正视: ~0.7m, 侧视: ~0.1m), 恰好落在 SA 半径内
+
+        尺寸/yaw 保留 GT+小噪声 (网络同时学习精修这两个维度).
         """
         rng = np.random.default_rng()
 
-        # GT global → LiDAR 帧 (与 obj_points 统一, 消除训练/推理 domain gap)
+        # GT global → LiDAR 帧
         gt_center_global = np.array(ann["translation"], dtype=np.float32)
         gt_center = self._global_to_lidar(gt_center_global, sample_token)
         gt_size = np.array(ann["size"], dtype=np.float32)
@@ -428,26 +423,34 @@ class Phase2Dataset(Dataset):
             lidar_yaw = quaternion_to_yaw(*lidar_calib["rotation"])
             gt_yaw = gt_yaw - lidar_yaw
 
-        # GT + 小噪声: LiDAR 帧下统一, 与推理分布一致
-        noisy_center = gt_center + rng.normal(0, self.NOISE_CENTER, 3).astype(np.float32)
+        # ---- Center: 可见表面质心 (z-bottom 35%) = 传感器真实测量 ----
+        obj_xyz = obj_points[:, :3].astype(np.float32)
+        z_vals = obj_xyz[:, 2]
+        z_cut = z_vals.min() + (z_vals.max() - z_vals.min()) * 0.35
+        bottom_mask = z_vals <= z_cut
+        if bottom_mask.sum() >= 3:
+            visible_centroid = obj_xyz[bottom_mask].mean(axis=0)
+        else:
+            visible_centroid = obj_xyz.mean(axis=0)
+        noisy_center = visible_centroid
+
+        # ---- Size/Yaw: GT + 小噪声 (与之前一致) ----
         noisy_size = gt_size + rng.normal(0, self.NOISE_SIZE, 3).astype(np.float32)
         noisy_size = np.clip(noisy_size, 0.3, 20.0)
         noisy_yaw = gt_yaw + math.radians(rng.normal(0, self.NOISE_YAW_DEG))
 
-        # 点云归一化: 去中心 + 旋转对齐 noisy 朝向
+        # ---- 点云归一化: 以 visible_centroid 为原点, 对齐 noisy_yaw ----
         local_xyz = obj_points[:, :3] - noisy_center
         local_xyz = rotate_points_z(local_xyz, -noisy_yaw)
 
-        # 按物体物理范围归一化 → SA 半径自适应尺度
-        extent = np.max(np.ptp(local_xyz, axis=0))                    # 点云跨度 (米)
-        extent = np.clip(extent, 0.3, 15.0)                           # 限制在合理范围
-        scale = extent / 2.0                                          # 半跨度 ≈ 典型物体半径
-        local_xyz = local_xyz / scale                                 # 归一化到 0~1 范围
+        extent = np.max(np.ptp(local_xyz, axis=0))
+        extent = np.clip(extent, 0.3, 15.0)
+        scale = extent / 2.0
+        local_xyz = local_xyz / scale
         scale_feat = np.full((len(obj_points), 1), np.log(scale), dtype=np.float32)
 
         local_xyz = self._resample(local_xyz, self.num_points)
 
-        # intensity (如果有)
         intensity = (obj_points[:, 3:4]
                      if obj_points.shape[1] >= 4
                      else np.zeros((len(obj_points), 1), dtype=np.float32))
@@ -456,7 +459,7 @@ class Phase2Dataset(Dataset):
 
         point_features = np.concatenate([local_xyz, intensity, scale_feat], axis=1).astype(np.float32)
 
-        # 残差目标 (饱和截断: 防止梯度爆炸, 模型只需学"朝正确方向挪有限步")
+        # ---- Offset target: GT - visible_centroid (可见表面 → 体积中心) ----
         delta_center = (gt_center - noisy_center).astype(np.float32)
         delta_center = np.clip(delta_center, -self.MAX_DELTA_CENTER, self.MAX_DELTA_CENTER)
         delta_size = (gt_size - noisy_size).astype(np.float32)
@@ -472,7 +475,8 @@ class Phase2Dataset(Dataset):
             math.sin(delta_yaw), math.cos(delta_yaw),
         ], dtype=np.float32)
 
-        return torch.from_numpy(point_features), torch.from_numpy(target)
+        return (torch.from_numpy(point_features),
+                torch.from_numpy(target))
 
     # ==========================================================================
     # 点云重采样: FPS (点数足够) 或 重复 (点数不足)
@@ -529,7 +533,10 @@ class Phase2Dataset(Dataset):
 # ==============================================================================
 
 def phase2_collate(batch):
-    """将 __getitem__ 返回的 frame-level 样本列表展开为 batch tensor."""
+    """将 __getitem__ 返回的 frame-level 样本列表展开为 batch tensor.
+
+    每个样本: (rgb_crop, lidar_pts, target, class_group)
+    """
     all_samples = []
     for frame_samples in batch:
         all_samples.extend(frame_samples)
@@ -537,24 +544,15 @@ def phase2_collate(batch):
     if not all_samples:
         return (
             torch.zeros(1, 3, 128, 128),
-            torch.zeros(1, 256, 4),
+            torch.zeros(1, 256, 5),
             torch.zeros(1, 8),
+            ["medium"],
         )
 
-    # 支持 4-tuple (with category) 和 3-tuple
-    has_cat = len(all_samples[0]) == 4
-    if has_cat:
-        rgb_crops, lidar_pts, targets, categories = zip(*all_samples)
-        return (
-            torch.stack(rgb_crops, dim=0),
-            torch.stack(lidar_pts, dim=0),
-            torch.stack(targets, dim=0),
-            list(categories),
-        )
-    else:
-        rgb_crops, lidar_pts, targets = zip(*all_samples)
-        return (
-            torch.stack(rgb_crops, dim=0),
-            torch.stack(lidar_pts, dim=0),
-            torch.stack(targets, dim=0),
-        )
+    rgb_crops, lidar_pts, targets, class_groups = zip(*all_samples)
+    return (
+        torch.stack(rgb_crops, dim=0),
+        torch.stack(lidar_pts, dim=0),
+        torch.stack(targets, dim=0),
+        list(class_groups),
+    )

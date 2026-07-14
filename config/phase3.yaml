@@ -1,0 +1,39 @@
+# Phase 3: DualHeadPointNet — 绝对回归 + 多帧聚合 + 地面去除
+# 用法: python scripts/train_phase3.py --config config/phase3.yaml
+
+model_type: "dual_head_pointnet"  # Phase 3 专用
+
+dataset:
+  nusc_root: "data/nuscenes"
+  version: "v1.0-mini"
+  nsweeps: 5
+  num_points: 512
+  crop_size: 128
+  max_dist: 50.0
+  min_points: 5
+  match_threshold: 80.0
+  remove_ground: true
+  use_augmentation: true
+  preprocess_dir: "data/nuscenes/preprocess_phase3/nsweeps_5"
+  val_scene_ids: 2
+  frustum_mix_ratio: 0.3   # 30% frustum + 70% GT-bbox 混合训练, 0=纯GT
+
+detector_path: "weiTiao_pt/best.pt"
+
+model:
+  pointnet_dim: 192
+  head_A_hidden: 96
+
+training:
+  epochs: 100
+  batch_size: 8
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 0
+  save_dir: "checkpoints_phase3"
+  device: "auto"
+  warmup_epochs: 5
+
+loss:
+  center_scale: 3.0     # center residual normalization (m)
+  size_scale: 5.0

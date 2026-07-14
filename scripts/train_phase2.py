@@ -82,11 +82,16 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch):
     total = {"loss": 0.0, "center": 0.0, "size": 0.0, "yaw": 0.0}
     start = time.time()
 
-    for batch_idx, (rgb, lidar, target) in enumerate(loader):
-        rgb, lidar, target = rgb.to(device), lidar.to(device), target.to(device)
+    for batch_idx, batch_data in enumerate(loader):
+        rgb, lidar, target, class_groups = batch_data
+        rgb = rgb.to(device); lidar = lidar.to(device)
+        target = target.to(device)
 
         optimizer.zero_grad()
-        pred = model(rgb, lidar)
+        if isinstance(model, LidarOnlyRefiner):
+            pred = model(rgb, lidar, class_groups=class_groups)
+        else:
+            pred = model(rgb, lidar)
         loss, loss_dict = criterion(pred, target)
         loss.backward()
         optimizer.step()
@@ -116,9 +121,14 @@ def validate(model, loader, criterion, device, epoch):
     total_loss = {"loss": 0.0, "center": 0.0, "size": 0.0, "yaw": 0.0}
     total_metrics = {"center_err": 0.0, "size_err": 0.0, "yaw_deg": 0.0}
 
-    for rgb, lidar, target in loader:
-        rgb, lidar, target = rgb.to(device), lidar.to(device), target.to(device)
-        pred = model(rgb, lidar)
+    for batch_data in loader:
+        rgb, lidar, target, class_groups = batch_data
+        rgb = rgb.to(device); lidar = lidar.to(device)
+        target = target.to(device)
+        if isinstance(model, LidarOnlyRefiner):
+            pred = model(rgb, lidar, class_groups=class_groups)
+        else:
+            pred = model(rgb, lidar)
         _, loss_dict = criterion(pred, target)
         metrics = compute_metrics(pred, target)
         for k in total_loss:

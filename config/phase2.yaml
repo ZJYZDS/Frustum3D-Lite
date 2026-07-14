@@ -6,14 +6,13 @@ data:
   min_lidar_pts: 10
   num_points: 256
   crop_size: 128
-  bbox_margin: 0.3
   noise_center: 0.3
   noise_size: 0.15
   noise_yaw_deg: 5.0
   match_max_dist_px: 80
   val_scene_ids: 2
 
-detector_path: "models/yolo26s.onnx"
+detector_path: "models/yolov8s-seg.onnx"
 
 d_model: 256
 n_heads: 8
@@ -21,9 +20,9 @@ num_layers: 1
 dropout: 0.1
 
 sa_configs:
-  - {npoint: 32, radius: 1.0, nsample: 64, mlp: [32, 32, 64]}
-  - {npoint: 16, radius: 0.5, nsample: 32, mlp: [64, 128, 128]}
-  - {npoint: 8,  radius: 0.2, nsample: 16, mlp: [128, 256, 256]}
+  - {npoint: 32, radius: 0.3, nsample: 64, mlp: [32, 32, 64]}
+  - {npoint: 16, radius: 0.7, nsample: 32, mlp: [64, 128, 128]}
+  - {npoint: 8,  radius: 1.5, nsample: 16, mlp: [128, 256, 256]}
 
 training:
   epochs: 30

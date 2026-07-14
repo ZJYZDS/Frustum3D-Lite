@@ -1,6 +1,6 @@
 # Cross-Modal 3D Bounding Box Refinement
 
-基于 PointNet++ 和跨模态注意力的 3D 检测框精修。给定 YOLO 2D 检测框 + LiDAR 点云，回归该物体的 3D bbox 残差（中心、尺寸、朝向）。
+基于 PointNet 的 3D 检测框精修。给定 YOLO 2D 检测框 + LiDAR 点云，回归物体的 3D bbox（中心、尺寸、朝向）。
 
 **数据集**: nuScenes v1.0-mini（CAM_FRONT + LIDAR_TOP）
 
@@ -8,95 +8,109 @@
 
 | 模型 | 参数量 | 输入 | 说明 |
 |------|--------|------|------|
-| **C2** (LidarOnlyRefiner) | 191K | LiDAR only | **主线模型**，3×SA → mean pool → MLP |
-| C1 (ImageOnlyRefiner) | 83K | RGB only | 纯 2D 基线，Lightweight2DExtractor → pool → MLP |
-| C3 (CrossModalFusion) | 2.8M | RGB + LiDAR | 融合模型，三阶段 cross-attention（实验性） |
+| **Phase 3** (PointNet3DDetector) | 51K | LiDAR only | **主线**，绝对回归 [cx,cy,cz,w,l,h,yaw] + face coverage encoder |
+| C2 (LidarOnlyRefiner) | 191K | LiDAR only | Phase 2，3×SA → mean pool → MLP，残差回归 |
+| C3 (CrossModalFusion) | 2.8M | RGB + LiDAR | Phase 2，三阶段 cross-attention（实验性） |
 
-C2 与 C3 在当前数据上性能差距在 GT 噪声范围内，C2 性价比最高。
+### Phase 3 指标 (nuScenes v1.0-mini val, 145 cars)
 
-| 指标 | C2 (191K) | C3 (2.8M) |
-|------|-----------|-----------|
-| Center err | 0.460m | 0.441m |
-| Size err | 0.120m | 0.114m |
-| Yaw err | 4.40° | 4.54° |
+| 指标 | 值 |
+|------|-----|
+| Center mean/median | 0.25m / 0.15m |
+| Size mean | 0.14m |
+| Yaw mean/median | 6.6° / **3.2°** |
+| Yaw <5° | 65% |
+| Yaw <10° | 93% |
 
-## 数据流
+## 推理管线
 
 ```
-CAM_FRONT (1600×900) + LIDAR_TOP (N×5)
+CAM_FRONT (1600×900) + LIDAR_TOP (multi-sweep)
     │
-    ├─ YOLO26s → 2D bboxes
-    ├─ LiDAR 投影 → bbox 内 3D 点提取
-    ├─ GT 匹配（2D 中心距离）
-    └─ 对每个物体:
-        点云 → 去中心化 + 旋转对齐 → extent 归一化 → FPS(256)
-        目标: 8 维残差 [Δx,Δy,Δz, Δw,Δl,Δh, sin(Δθ), cos(Δθ)]
+    ├─ YOLO → 2D bboxes
+    ├─ frustum 裁剪 (bbox → 3D 视锥)
+    ├─ ROR 去噪 (统计离群点剔除)
+    ├─ DBSCAN 聚类 (取最大簇)
+    └─ PointNet3DDetector → [cx,cy,cz, w,l,h, yaw]
 ```
 
-训练时对 GT 加噪声（center±0.3m, size±0.15m, yaw±5°），模型学习 noisy→GT 的残差。
+## 可视化
 
-### Extent 自适应归一化
+### 2D 检测 (YOLO + 拟合参数)
+`display/infer_frustum/frame_XX_infer_cam.jpg`
 
-不同物体尺度差异大（行人 0.5m vs 卡车 10m），用点云半跨度自适应缩放，使 SA 半径工作在相对单位。
+YOLO 2D 检测框 + 拟合的 3D 参数标注（yaw/size/distance），无 3D 线框投影。
 
-## 可视化 (C2 在 nuScenes 上的推理结果)
+### 3D 点云 + BBox (LiDAR 全景)
+`display/multi_frame/frame_XX.ply` / `display/infer_frustum/frame_XX_infer.ply`
 
-**图例**: 橙色点 = CAM_FRONT FOV 内 LiDAR, 深灰点 = FOV 外, 绿色框 = GT, 蓝色框 = 噪声输入, 红色框 = C2 预测
+- **金色点** = CAM_FRONT FOV 内 LiDAR 点
+- **深灰点** = FOV 外 LiDAR 点
+- **彩色 3D BBox** = 模型预测
 
-### Frame 01 (卡车 + 轿车)
+| 视图 | 文件 |
+|------|------|
+| 俯视图 (XY) | `frame_XX_infer_top.png` |
+| 正视图 (XZ) | `frame_XX_infer_front.png` |
+| 3D 透视图 | `frame_XX_infer_persp.png` |
+| 相机投影 | `frame_XX_infer_cam.jpg` |
 
-| 2D 检测 (CAM_FRONT) | 3D 点云 + bbox (透视图) | 3D 俯视图 |
-|:---:|:---:|:---:|
-| ![cam_01](display/frame_01_cam.jpg) | ![3d_01](display/frame_01_persp.png) | ![top_01](display/frame_01_top.png) |
+### 生成可视化
 
-### Frame 02 (两轿车 + 行人)
+```bash
+# GT-bbox 管线 (干净点云, 评估模型上限)
+python scripts/visualize_scene.py --num_frames 8
 
-| 2D 检测 (CAM_FRONT) | 3D 点云 + bbox (透视图) | 3D 俯视图 |
-|:---:|:---:|:---:|
-| ![cam_02](display/frame_02_cam.jpg) | ![3d_02](display/frame_02_persp.png) | ![top_02](display/frame_02_top.png) |
+# Frustum 管线 (YOLO→frustum→ROR→DBSCAN→Model, 模拟部署)
+python scripts/visualize_infer.py --num_frames 8
+```
 
-### Frame 03 (巴士 + 轿车)
-
-| 2D 检测 (CAM_FRONT) | 3D 点云 + bbox (透视图) | 3D 俯视图 |
-|:---:|:---:|:---:|
-| ![cam_03](display/frame_03_cam.jpg) | ![3d_03](display/frame_03_persp.png) | ![top_03](display/frame_03_top.png) |
-
-> 每个物体的局部 PLY 见 `display/frame_XX/obj_*.ply`, 用 CloudCompare 打开即可自动对焦到该物体。
+输出目录: `display/multi_frame/` (GT-bbox) 和 `display/infer_frustum/` (frustum)。
 
 ## 快速开始
 
 ```bash
-# 训练 C2
-python scripts/train_phase2.py
+# Phase 3 训练
+python scripts/train_phase3.py --epochs 80
 
-# 训练 C3
-python scripts/train_phase2.py --model_type fusion
-
-# 断点续训
-python scripts/train_phase2.py --resume checkpoints_phase2/lidar_only.pt
+# Phase 3 预处理 (多帧聚合 + 地面去除)
+python scripts/preprocess_phase3.py --nsweeps 5
 
 # 可视化
-python scripts/visualize_c2.py
+python scripts/visualize_scene.py --num_frames 8
+python scripts/visualize_infer.py --num_frames 8
 ```
 
 ## 文件结构
 
 ```
 ├── src/
-│   ├── fusion.py           # C1/C2/C3 模型定义
-│   ├── model.py            # PointNet++ FPS / Ball Query / Set Abstraction
-│   ├── dataset_phase2.py   # 数据集: YOLO检测 → crop → 噪声 → 残差
-│   ├── dataset_phase1.py   # LiDARProjector, 坐标变换
-│   ├── detector.py         # YOLO26s ONNX 推理
-│   ├── loss.py             # SmoothL1 + MSE(sin/cos)
-│   └── metrics.py          # center(m) / size(m) / yaw(°)
+│   ├── fusion.py              # PointNet3DDetector + face coverage encoder
+│   ├── inference.py            # Frustum 推理管线
+│   ├── loss.py                 # Center + Size + Yaw(cos2θ) 损失
+│   ├── dataset_phase3.py       # Phase3 数据集 + frustum 混合训练
+│   ├── dataset_phase2.py       # Phase2 数据集 (残差回归)
+│   ├── dataset_phase1.py       # LiDARProjector, 坐标变换
+│   ├── detector.py             # YOLO 检测器 (ONNX / PT)
+│   ├── ground_removal.py       # RANSAC 地面去除
+│   ├── init_estimator.py       # 2D→3D 初始化
+│   ├── model.py                # PointNet++ FPS / Ball Query / SA
+│   └── metrics.py              # 评估指标
 ├── scripts/
-│   ├── train_phase2.py     # 训练 (C1/C2/C3, resume)
-│   └── visualize_c2.py     # C2 推理可视化 (整帧 LIDAR + 3D bbox PLY)
-├── checkpoints_phase2/
-│   ├── lidar_only.pt       # C2 epoch 19
-│   └── fusion.pt           # C3 epoch 23
-├── docs/design.md          # 详细设计文档
-├── log/                    # 实验记录与决策
-└── models/yolo26s.onnx     # YOLO 检测模型
+│   ├── train_phase3.py         # Phase 3 训练
+│   ├── train_phase2.py         # Phase 2 训练
+│   ├── visualize_scene.py      # GT-bbox 管线可视化
+│   ├── visualize_infer.py      # Frustum 管线可视化
+│   ├── preprocess_phase3.py    # 数据预处理
+│   └── verify_preprocess.py    # 预处理验证
+├── config/
+│   ├── phase3.yaml             # Phase 3 配置
+│   └── phase2.yaml             # Phase 2 配置
+└── doc/                        # 设计文档
 ```
+
+## 坐标帧
+
+详见 `CLAUDE.md`。关键: 所有训练和推理在 **LiDAR 帧** 进行。
+
+nuScenes 尺寸约定: `[width, length, height]`

@@ -132,11 +132,12 @@ class SetAbstraction(nn.Module):
             in_c = out_c
         self.mlp = nn.Sequential(*layers)
 
-    def forward(self, xyz, features):
+    def forward(self, xyz, features, radius_scale=1.0):
         """
         Args:
             xyz:      (B, N, 3)  点云坐标
             features: (B, C, N)  点云特征 (初始为 xyz+intensity)
+            radius_scale: float 半径缩放因子, 用于类自适应 SA (e.g. car=1.0, bus=2.0)
         Returns:
             centroids:    (B, npoint, 3)  降采样后的坐标
             new_features: (B, D_out, npoint)  降采样后的特征
@@ -146,8 +147,9 @@ class SetAbstraction(nn.Module):
         # 1. FPS 降采样
         centroids, _ = farthest_point_sample(xyz, self.npoint)
 
-        # 2. Ball Query 邻域搜索
-        group_idx = ball_query(centroids, xyz, self.radius, self.nsample)
+        # 2. Ball Query 邻域搜索 (radius 按类缩放)
+        effective_radius = self.radius * radius_scale
+        group_idx = ball_query(centroids, xyz, effective_radius, self.nsample)
 
         # 3. 收集邻域点的 xyz 坐标, 去中心化 (相对 centroid)
         batch_indices = torch.arange(B, device=xyz.device).view(
