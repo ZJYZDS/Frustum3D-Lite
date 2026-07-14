@@ -402,7 +402,7 @@ class YOLOPtDetector:
     输出格式与 YOLODetectONNX 一致, 可直接替换.
     """
 
-    def __init__(self, pt_path, conf_thresh=0.5, imgsz=640, device='cuda'):
+    def __init__(self, pt_path, conf_thresh=0.25, imgsz=640, device='cuda'):
         from ultralytics import YOLO
         self.model = YOLO(pt_path)
         self.conf = conf_thresh
