@@ -257,18 +257,23 @@ def main():
         preds_gt = pipeline_predict_with_gt(frame_samples, model, device)
 
         # ── Format for display ──
-        def fmt_preds(pred_list):
+        def fmt_preds(pred_list, T_l2c=None):
             out = []
             for p in pred_list:
                 c = p['center']; s = p['size']; y = p['yaw']
                 nm = p['class_name']; cid = p['class_id']
-                d = np.linalg.norm(c[:2])
+                # Camera-frame depth (intuitive for image annotation)
+                if T_l2c is not None:
+                    c_cam = T_l2c[:3,:3] @ c + T_l2c[:3,3]
+                    d_cam = float(c_cam[2])  # forward depth in camera frame
+                else:
+                    d_cam = np.linalg.norm(c[:2])
                 bbox = p.get('bbox', np.array([0, 0, 0, 0]))
-                out.append((c, s, y, nm, cid, d, bbox))
+                out.append((c, s, y, nm, cid, d_cam, bbox))
             return out
 
-        pf = fmt_preds(preds_frustum)
-        pg = fmt_preds(preds_gt)
+        pf = fmt_preds(preds_frustum, T_l2c)
+        pg = fmt_preds(preds_gt, T_l2c)
 
         # ── Frustum mask: CAM_FRONT 可视区域内的 LiDAR 点 ──
         h_img, w_img = img.shape[:2]
