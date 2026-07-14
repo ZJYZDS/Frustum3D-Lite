@@ -6,23 +6,19 @@
 **输出**: 每个检测物体的 3D bbox — 中心 (cx, cy, cz)、尺寸 (w, l, h)、朝向 (yaw)
 **数据集**: nuScenes v1.0-mini
 
-## 效果
+## 效果 (Test Set, Frame 03 — 9 物体)
 
-> 图例: 金色点 = CAM_FRONT 视锥内 LiDAR 点, 深灰 = 视锥外, 彩色框 = 模型预测 3D BBox, 箭头 = 朝向.
+> 图例: 金色点 = CAM_FRONT 视锥内 LiDAR 点, 深灰 = 视锥外, 彩色粗框 = 模型预测 3D BBox, 箭头 = 朝向.
 
-![top](docs/images/frame01_top.png)
+![cam](docs/images/test_cam.jpg)
 
-*LiDAR 俯视图 — 所有 3D BBox 在同一帧点云中展示*
+*2D 检测: YOLO 框 + 3D BBox 投影 + 相机深度标注*
 
-![cam](docs/images/frame01_cam.jpg)
+![top](docs/images/test_top.png)
 
-*YOLO 2D 检测 + 3D BBox 投影到 CAM_FRONT*
+*LiDAR 俯视图 — 所有 9 个 3D BBox 在同一帧点云中*
 
-![persp](docs/images/frame01_persp.png)
-
-*3D 透视图*
-
-> 用 CloudCompare / Meshlab 打开 `docs/images/frame01.ply` 可交互式查看每根 bbox 线框在 LiDAR 点云中的位置.
+> 用 CloudCompare / Meshlab 打开 `docs/images/test.ply` 可交互式查看所有 3D BBox 线框. 更多帧: `display/test/` (frustum 管线), `display/test_gt/` (GT-bbox 管线).
 
 ## Phase 3 (当前主线)
 
