@@ -34,26 +34,28 @@ CAM_FRONT (1600×900) + LIDAR_TOP (multi-sweep)
     └─ PointNet3DDetector → [cx,cy,cz, w,l,h, yaw]
 ```
 
-## 可视化
+## 可视化 (GT-bbox 管线, Frame 01)
 
-### 2D 检测 (YOLO + 拟合参数)
-`display/infer_frustum/frame_XX_infer_cam.jpg`
+**图例**: 金色点 = CAM_FRONT FOV 内 LiDAR, 深灰点 = FOV 外, 彩色框 = 模型预测 3D BBox, 箭头 = 朝向.
 
-YOLO 2D 检测框 + 拟合的 3D 参数标注（yaw/size/distance），无 3D 线框投影。
+### YOLO 2D 检测 + 3D BBox 投影
 
-### 3D 点云 + BBox (LiDAR 全景)
-`display/multi_frame/frame_XX.ply` / `display/infer_frustum/frame_XX_infer.ply`
+![cam](docs/images/frame01_cam.jpg)
 
-- **金色点** = CAM_FRONT FOV 内 LiDAR 点
-- **深灰点** = FOV 外 LiDAR 点
-- **彩色 3D BBox** = 模型预测
+### LiDAR 俯视图 — 所有 3D BBox 同框
 
-| 视图 | 文件 |
-|------|------|
-| 俯视图 (XY) | `frame_XX_infer_top.png` |
-| 正视图 (XZ) | `frame_XX_infer_front.png` |
-| 3D 透视图 | `frame_XX_infer_persp.png` |
-| 相机投影 | `frame_XX_infer_cam.jpg` |
+![top](docs/images/frame01_top.png)
+
+### LiDAR 正视图 (XZ)
+
+![front](docs/images/frame01_front.png)
+
+### 3D 透视图
+
+![persp](docs/images/frame01_persp.png)
+
+### 3D 点云 + BBox (PLY)
+用 CloudCompare / Meshlab 打开 `docs/images/frame01.ply` 可交互式查看所有 3D BBox 在 LiDAR 点云中的位置。
 
 ### 生成可视化
 
