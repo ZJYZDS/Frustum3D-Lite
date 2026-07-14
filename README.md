@@ -2,7 +2,7 @@
 
 基于 YOLO 2D 检测 + LiDAR 点云的 3D 目标检测框回归。
 
-**输入**: CAM_FRONT 图像 (1600×900) + LIDAR_TOP 多帧聚合点云
+**输入**: 6 相机 (360°) + LIDAR_TOP 多帧聚合点云
 **输出**: 每个检测物体的 3D bbox — 中心 (cx, cy, cz)、尺寸 (w, l, h)、朝向 (yaw)
 **数据集**: nuScenes v1.0-mini
 
@@ -34,9 +34,9 @@
 | 输入 | 512 个 LiDAR 点 (物体局部坐标) |
 | 输出 | [dx, dy, dz, δw, δl, δh, cos2θ, sin2θ] |
 | 骨干 | PointNet (3→64→128 + MaxPool, 128-dim 全局特征) |
-| 几何特征 | prior (16) + centroid (16) + extent/prior (16) + viewdir (16) + face_coverage (16) |
-| 融合维度 | 208 |
-| 头结构 | center: 208→128→64→3 / size: 208→64→3 / yaw: 208→64→2 |
+| 几何特征 | prior(16) + centroid(16) + extent(16) + viewdir(16) + face(16) + bbox(12) |
+| 融合维度 | 220 |
+| 头结构 | center: 220→192→96→3 / size: 220→96→3 / yaw: 220→96→2 |
 
 **Face Coverage**: 计算物体 6 个面的点云覆盖率 → 模型知道哪个面最完整 → 推断中心偏移方向.
 
@@ -45,7 +45,7 @@
 ```
 每帧:
   1. 加载预处理的 LiDAR 点云 (5-sweep 聚合 + RANSAC 地面去除)
-  2. YOLO 检测 CAM_FRONT → 2D bbox
+  2. YOLO 检测 6 相机 (360°) → 2D bbox
   3. GT 3D bbox 中心投影到 2D → 匹配 YOLO bbox → 确定 class_id
   4. GT bbox 内部点提取 (+ 跨帧累积 4 帧同 instance 的点)
   5. 30% 概率用 frustum 管线替换 GT-bbox 点 (YOLO bbox→视锥→ROR→DBSCAN)
@@ -62,19 +62,18 @@
 | Size | MSE(d_size_pred, d_size_gt) | 0.3 |
 | Yaw | 1 − cos(2Δθ) (person 类跳过) | 0.3 |
 
-### 指标 (nuScenes mini val, 145 cars)
+### 指标 (nuScenes mini val, 360° multi-camera, 234 cars)
 
 | 指标 | 值 |
 |------|-----|
-| Center median | 0.15m |
-| Yaw median | **3.2°** |
-| Yaw < 5° | 65% |
-| Yaw < 10° | 93% |
+| Car center mean | 0.26m |
+| Car yaw mean | **7.6°** |
+| Car size mean | 0.15m |
 
 ### 推理管线
 
 ```
-CAM_FRONT → YOLO → 2D bboxes
+6 Cameras (360°) → YOLO → 2D bboxes
 LIDAR_TOP → 多帧聚合 → 地面去除 → 全景点云
                          │
 每个 YOLO bbox:
@@ -134,6 +133,9 @@ python scripts/preprocess_phase3.py --nsweeps 5
 
 # 训练
 python scripts/train_phase3.py --epochs 80
+
+# 360° 多相机可视化
+python scripts/visualize_360.py
 
 # GT-bbox 可视化 (模型上限评估)
 python scripts/visualize_scene.py --num_frames 8
