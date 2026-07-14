@@ -1,118 +1,144 @@
 # Cross-Modal 3D Bounding Box Refinement
 
-基于 PointNet 的 3D 检测框精修。给定 YOLO 2D 检测框 + LiDAR 点云，回归物体的 3D bbox（中心、尺寸、朝向）。
+基于 YOLO 2D 检测 + LiDAR 点云的 3D 目标检测框回归。
 
-**数据集**: nuScenes v1.0-mini（CAM_FRONT + LIDAR_TOP）
+**输入**: CAM_FRONT 图像 (1600×900) + LIDAR_TOP 多帧聚合点云
+**输出**: 每个检测物体的 3D bbox — 中心 (cx, cy, cz)、尺寸 (w, l, h)、朝向 (yaw)
+**数据集**: nuScenes v1.0-mini
 
-## 模型
+## 效果
 
-| 模型 | 参数量 | 输入 | 说明 |
-|------|--------|------|------|
-| **Phase 3** (PointNet3DDetector) | 51K | LiDAR only | **主线**，绝对回归 [cx,cy,cz,w,l,h,yaw] + face coverage encoder |
-| C2 (LidarOnlyRefiner) | 191K | LiDAR only | Phase 2，3×SA → mean pool → MLP，残差回归 |
-| C3 (CrossModalFusion) | 2.8M | RGB + LiDAR | Phase 2，三阶段 cross-attention（实验性） |
-
-### Phase 3 指标 (nuScenes v1.0-mini val, 145 cars)
-
-| 指标 | 值 |
-|------|-----|
-| Center mean/median | 0.25m / 0.15m |
-| Size mean | 0.14m |
-| Yaw mean/median | 6.6° / **3.2°** |
-| Yaw <5° | 65% |
-| Yaw <10° | 93% |
-
-## 推理管线
-
-```
-CAM_FRONT (1600×900) + LIDAR_TOP (multi-sweep)
-    │
-    ├─ YOLO → 2D bboxes
-    ├─ frustum 裁剪 (bbox → 3D 视锥)
-    ├─ ROR 去噪 (统计离群点剔除)
-    ├─ DBSCAN 聚类 (取最大簇)
-    └─ PointNet3DDetector → [cx,cy,cz, w,l,h, yaw]
-```
-
-## 可视化 (GT-bbox 管线, Frame 01)
-
-**图例**: 金色点 = CAM_FRONT FOV 内 LiDAR, 深灰点 = FOV 外, 彩色框 = 模型预测 3D BBox, 箭头 = 朝向.
-
-### YOLO 2D 检测 + 3D BBox 投影
-
-![cam](docs/images/frame01_cam.jpg)
-
-### LiDAR 俯视图 — 所有 3D BBox 同框
+> 图例: 金色点 = CAM_FRONT 视锥内 LiDAR 点, 深灰 = 视锥外, 彩色框 = 模型预测 3D BBox, 箭头 = 朝向.
 
 ![top](docs/images/frame01_top.png)
 
-### LiDAR 正视图 (XZ)
+*LiDAR 俯视图 — 所有 3D BBox 在同一帧点云中展示*
 
-![front](docs/images/frame01_front.png)
+![cam](docs/images/frame01_cam.jpg)
 
-### 3D 透视图
+*YOLO 2D 检测 + 3D BBox 投影到 CAM_FRONT*
 
 ![persp](docs/images/frame01_persp.png)
 
-### 3D 点云 + BBox (PLY)
-用 CloudCompare / Meshlab 打开 `docs/images/frame01.ply` 可交互式查看所有 3D BBox 在 LiDAR 点云中的位置。
+*3D 透视图*
 
-### 生成可视化
+> 用 CloudCompare / Meshlab 打开 `docs/images/frame01.ply` 可交互式查看每根 bbox 线框在 LiDAR 点云中的位置.
 
-```bash
-# GT-bbox 管线 (干净点云, 评估模型上限)
-python scripts/visualize_scene.py --num_frames 8
+## Phase 3 (当前主线)
 
-# Frustum 管线 (YOLO→frustum→ROR→DBSCAN→Model, 模拟部署)
-python scripts/visualize_infer.py --num_frames 8
+### 模型: PointNet3DDetector
+
+| 项目 | 说明 |
+|------|------|
+| 参数量 | ~51K |
+| 输入 | 512 个 LiDAR 点 (物体局部坐标) |
+| 输出 | [dx, dy, dz, δw, δl, δh, cos2θ, sin2θ] |
+| 骨干 | PointNet (3→64→128 + MaxPool, 128-dim 全局特征) |
+| 几何特征 | prior (16) + centroid (16) + extent/prior (16) + viewdir (16) + face_coverage (16) |
+| 融合维度 | 208 |
+| 头结构 | center: 208→128→64→3 / size: 208→64→3 / yaw: 208→64→2 |
+
+**Face Coverage**: 计算物体 6 个面的点云覆盖率 → 模型知道哪个面最完整 → 推断中心偏移方向.
+
+### 数据管线
+
+```
+每帧:
+  1. 加载预处理的 LiDAR 点云 (5-sweep 聚合 + RANSAC 地面去除)
+  2. YOLO 检测 CAM_FRONT → 2D bbox
+  3. GT 3D bbox 中心投影到 2D → 匹配 YOLO bbox → 确定 class_id
+  4. GT bbox 内部点提取 (+ 跨帧累积 4 帧同 instance 的点)
+  5. 30% 概率用 frustum 管线替换 GT-bbox 点 (YOLO bbox→视锥→ROR→DBSCAN)
+  6. 采样到 512 点, 随机 Z 轴旋转增强
+  7. 计算 face_coverage
+  8. 构建 target: d_center = (gt_center - centroid)/3.0, d_size = log(gt_size/prior)
 ```
 
-输出目录: `display/multi_frame/` (GT-bbox) 和 `display/infer_frustum/` (frustum)。
+### 损失
+
+| 项 | 公式 | 权重 |
+|----|------|------|
+| Center | SmoothL1(d_center_pred, d_center_gt) | 4.0 |
+| Size | MSE(d_size_pred, d_size_gt) | 0.3 |
+| Yaw | 1 − cos(2Δθ) (person 类跳过) | 0.3 |
+
+### 指标 (nuScenes mini val, 145 cars)
+
+| 指标 | 值 |
+|------|-----|
+| Center median | 0.15m |
+| Yaw median | **3.2°** |
+| Yaw < 5° | 65% |
+| Yaw < 10° | 93% |
+
+### 推理管线
+
+```
+CAM_FRONT → YOLO → 2D bboxes
+LIDAR_TOP → 多帧聚合 → 地面去除 → 全景点云
+                         │
+每个 YOLO bbox:
+  1. frustum 裁剪 (bbox → 3D 视锥射线, 自适应 margin)
+  2. ROR 去噪 (Open3D statistical outlier removal)
+  3. DBSCAN 聚类 → 取最大簇
+  4. 采样 512 点 → PointNet3DDetector
+  5. 解码: center = centroid + d_center×3.0, size = prior×exp(d_size)×1.12
+```
+
+## Phase 2 (残差回归, 参考)
+
+C2 (191K) / C3 (2.8M) 使用 PointNet++ Set Abstraction + 残差回归. 详见 `config/phase2.yaml`.
+
+## 项目结构
+
+```
+├── src/
+│   ├── fusion.py              # PointNet3DDetector + C1/C2/C3 模型
+│   ├── dataset_phase3.py       # Phase 3: 多帧/地面/frustum/face_coverage
+│   ├── dataset_phase2.py       # Phase 2: YOLO→crop→残差
+│   ├── dataset_phase1.py       # LiDARProjector + 坐标变换 (共用)
+│   ├── inference.py            # Frustum 推理管线 (YOLO→视锥→ROR→DBSCAN→Model)
+│   ├── loss.py                 # PointNet3DLoss + BboxRefinementLoss
+│   ├── metrics.py              # 评估指标
+│   ├── detector.py             # YOLO 检测器 (onnx / pt)
+│   ├── ground_removal.py       # RANSAC 地面去除 + 多帧 LiDAR 加载
+│   ├── init_estimator.py       # 2D→3D 初始化 (PCA yaw 等)
+│   ├── model.py                # PointNet++ FPS / Ball Query / Set Abstraction
+│   └── new_model_arch.md       # Phase 3 架构设计
+├── scripts/
+│   ├── train_phase3.py         # Phase 3 训练
+│   ├── train_phase2.py         # Phase 2 训练
+│   ├── visualize_scene.py      # GT-bbox 可视化 (评估模型上限)
+│   ├── visualize_infer.py      # Frustum 推理可视化 (模拟部署)
+│   ├── visualize_c2.py         # Phase 2 C2 可视化
+│   ├── preprocess_phase3.py    # 离线预处理 (多帧聚合+地面去除→.npy)
+│   └── compare_c1c2c3.py       # Phase 2 模型对比
+├── config/
+│   ├── phase3.yaml             # Phase 3 训练参数
+│   └── phase2.yaml             # Phase 2 训练参数
+├── docs/images/                # 效果截图 (.png/.jpg/.ply)
+├── CLAUDE.md                   # 坐标帧约定 + 已知陷阱 + 训练命令
+└── display/                    # 可视化输出 (gitignored)
+```
 
 ## 快速开始
 
 ```bash
-# Phase 3 训练
-python scripts/train_phase3.py --epochs 80
-
-# Phase 3 预处理 (多帧聚合 + 地面去除)
+# 预处理 (仅首次)
 python scripts/preprocess_phase3.py --nsweeps 5
 
-# 可视化
+# 训练
+python scripts/train_phase3.py --epochs 80
+
+# GT-bbox 可视化 (模型上限评估)
 python scripts/visualize_scene.py --num_frames 8
+
+# Frustum 推理可视化 (模拟真实部署)
 python scripts/visualize_infer.py --num_frames 8
 ```
 
-## 文件结构
+输出: `display/multi_frame/` (GT-bbox), `display/infer_frustum/` (frustum).
 
-```
-├── src/
-│   ├── fusion.py              # PointNet3DDetector + face coverage encoder
-│   ├── inference.py            # Frustum 推理管线
-│   ├── loss.py                 # Center + Size + Yaw(cos2θ) 损失
-│   ├── dataset_phase3.py       # Phase3 数据集 + frustum 混合训练
-│   ├── dataset_phase2.py       # Phase2 数据集 (残差回归)
-│   ├── dataset_phase1.py       # LiDARProjector, 坐标变换
-│   ├── detector.py             # YOLO 检测器 (ONNX / PT)
-│   ├── ground_removal.py       # RANSAC 地面去除
-│   ├── init_estimator.py       # 2D→3D 初始化
-│   ├── model.py                # PointNet++ FPS / Ball Query / SA
-│   └── metrics.py              # 评估指标
-├── scripts/
-│   ├── train_phase3.py         # Phase 3 训练
-│   ├── train_phase2.py         # Phase 2 训练
-│   ├── visualize_scene.py      # GT-bbox 管线可视化
-│   ├── visualize_infer.py      # Frustum 管线可视化
-│   ├── preprocess_phase3.py    # 数据预处理
-│   └── verify_preprocess.py    # 预处理验证
-├── config/
-│   ├── phase3.yaml             # Phase 3 配置
-│   └── phase2.yaml             # Phase 2 配置
-└── doc/                        # 设计文档
-```
+## 坐标约定
 
-## 坐标帧
-
-详见 `CLAUDE.md`。关键: 所有训练和推理在 **LiDAR 帧** 进行。
-
-nuScenes 尺寸约定: `[width, length, height]`
+所有计算在 **LiDAR 帧** 进行. nuScenes 尺寸: `[width, length, height]`. 详见 `CLAUDE.md`.
