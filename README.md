@@ -10,11 +10,7 @@
 
 > 6 相机 YOLO 检测 + LiDAR 全景 3D BBox. 彩色粗框 = 模型预测, 箭头 = 朝向.
 
-### Frame 01 (16 物体)
-
-![f01](docs/images/frame01_360top.png)
-
-### Frame 02 (21 物体)
+### Frame 02 (21 物体, 全方向 40m)
 
 ![f02](docs/images/frame02_360top.png)
 
