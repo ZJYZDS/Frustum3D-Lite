@@ -35,8 +35,9 @@ def pipeline_predict(model, pts_lidar, dets, K, T_lidar2cam, device,
     import torch
 
     if class_names is None:
-        class_names = {0: 'pedestrian', 1: 'rider', 2: 'car', 3: 'truck',
-                       4: 'bus', 6: 'motorcycle', 7: 'bicycle'}
+        class_names = {0: 'ped', 1: 'rider', 2: 'car', 3: 'truck',
+                       4: 'bus', 5: 'train', 6: 'moto', 7: 'bike',
+                       8: 'tlight', 9: 'tsign'}
 
     # 行人类别: 跳过模型 yaw, 用 PCA 兜底
     SKIP_YAW_CLASSES = {0, 1, 8, 9}  # person + traffic light/sign: no geometric yaw
@@ -168,8 +169,9 @@ def pipeline_predict_with_gt(points_list, model, device,
     """
     import torch
     if class_names is None:
-        class_names = {0: 'pedestrian', 1: 'rider', 2: 'car', 3: 'truck',
-                       4: 'bus', 6: 'motorcycle', 7: 'bicycle'}
+        class_names = {0: 'ped', 1: 'rider', 2: 'car', 3: 'truck',
+                       4: 'bus', 5: 'train', 6: 'moto', 7: 'bike',
+                       8: 'tlight', 9: 'tsign'}
 
     SKIP_YAW_CLASSES = {0, 1, 8, 9}  # person + traffic light/sign: no geometric yaw
     CENTER_SCALE = 3.0
