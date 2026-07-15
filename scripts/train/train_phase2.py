@@ -25,7 +25,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.dataset_phase2 import Phase2Dataset, phase2_collate
 from src.fusion import CrossModalFusion, ImageOnlyRefiner, LidarOnlyRefiner

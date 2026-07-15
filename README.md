@@ -61,13 +61,13 @@
 
 ```bash
 # 预处理
-python scripts/preprocess_phase3.py --nsweeps 5
+python scripts/tools/preprocess_phase3.py --nsweeps 5
 
 # 训练
-python scripts/train_phase3.py --config config/train.yaml --epochs 80
+python scripts/train/train_phase3.py --config config/train.yaml --epochs 80
 
 # 360° 可视化
-python scripts/visualize_360.py
+python scripts/test/visualize_360.py
 ```
 
 ## 配置
@@ -103,10 +103,16 @@ dataset:
 │   ├── detector.py             # YOLO 检测器
 │   └── ...
 ├── scripts/
-│   ├── train_phase3.py         # 训练入口
-│   ├── visualize_360.py        # 360° 可视化
-│   ├── visualize_scene.py      # 单帧可视化
-│   └── preprocess_phase3.py    # 预处理
+│   ├── train/                  # 训练入口
+│   │   ├── train_phase3.py
+│   │   └── train_phase2.py
+│   ├── test/                   # 测试/评估/可视化
+│   │   ├── visualize_360.py
+│   │   ├── visualize_scene.py
+│   │   ├── visualize_infer.py
+│   │   └── visualize_c2.py
+│   └── tools/                  # 预处理/工具
+│       └── preprocess_phase3.py
 └── display/                    # 可视化输出 (gitignored)
 ```
 

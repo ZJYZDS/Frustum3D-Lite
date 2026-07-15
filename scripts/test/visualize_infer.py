@@ -17,7 +17,7 @@ import cv2, numpy as np, torch, yaml
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.dataset_phase3 import aggregate_sweeps, filter_points_by_frustum, \
     remove_statistical_outliers, extract_largest_cluster
 from src.fusion import PointNet3DDetector

@@ -15,7 +15,7 @@ import cv2, numpy as np, torch, yaml
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.dataset_phase3 import Phase3Dataset, aggregate_sweeps
 from src.fusion import PointNet3DDetector
 from src.dataset_phase1 import LiDARProjector

@@ -3,7 +3,7 @@ C2 vs C3 逐帧对比: 加载两个模型, 在验证集上推理, 对比物理�
 """
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 import numpy as np

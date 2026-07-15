@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np, torch, yaml
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.dataset_phase3 import Phase3Dataset, phase3_collate
 from src.fusion import PointNet3DDetector
 from src.loss import PointNet3DLoss

@@ -15,7 +15,7 @@ C1/C2/C3 消融对比脚本: 每种模型训练 5 epochs, 输出对比表.
 import sys
 import time
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 from torch.utils.data import DataLoader
