@@ -367,7 +367,7 @@ class Phase3Dataset(Dataset):
 
         # 加载 YOLO 检测器: .pt 用 ultralytics, .onnx 用 ONNX Runtime
         if detector_path.endswith('.pt'):
-            self.detector = YOLOPtDetector(detector_path, conf_thresh=0.6)
+            self.detector = YOLOPtDetector(detector_path, conf_thresh=0.35)
         else:
             self.detector = YOLODetectONNX(detector_path, conf_thresh=0.5)
 

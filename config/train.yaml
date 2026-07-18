@@ -50,6 +50,6 @@ loss:
 # ---- Detection ----
 detection:
   detector_path: weiTiao_pt/best.pt
-  conf_thresh: 0.6              # YOLO 置信度阈值
+  conf_thresh: 0.35             # YOLO 置信度阈值
   obstacle_classes: [0,1,2,3,4,5,6,7,8,9]  # 检测类别
   skip_yaw_classes: [0,1,8,9]   # 不拟合 yaw 的类别 (人/交通灯/标志)

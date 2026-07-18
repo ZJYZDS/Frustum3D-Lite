@@ -10,7 +10,6 @@ from src.dataset_phase1 import LiDARProjector
 from src.detector import YOLOPtDetector, OBSTACLE_CLASS_IDS
 from src.inference import pipeline_predict
 from src.tracker import Tracker
-from src.panorama import stitch_panorama, split_detections
 from nuscenes.nuscenes import NuScenes
 
 device = torch.device('cuda')
@@ -58,47 +57,35 @@ for fi, sample in enumerate(scene_samples):
     lidar = np.load(pp).astype(np.float32)
     if len(lidar) > 25000: lidar = lidar[np.random.choice(len(lidar), 25000, replace=False)]
 
-    # ── 360° panorama YOLO (single pass, eliminates cross-camera boundary issues) ──
+    # Per-camera YOLO detection
+    all_preds = []
+    cam_frames = {}
     cam_imgs = {}
     for cam in CM:
         img_path = nusc.get_sample_data_path(sample['data'][cam]) if cam in sample['data'] else None
-        if img_path is not None:
-            img = cv2.imread(img_path)
-            if img is not None: cam_imgs[cam] = img
-
-    panorama, x_offsets = stitch_panorama(cam_imgs, target_height=640)
-    all_preds = []
-
-    if panorama is not None:
-        pan_dets = detector.predict(panorama)
-        pan_dets = [d for d in pan_dets if d['class_id'] in OBSTACLE_CLASS_IDS]
-        # NMS on panorama
-        keep = np.ones(len(pan_dets), dtype=bool)
-        for i in range(len(pan_dets)):
+        if img_path is None: continue
+        img = cv2.imread(img_path)
+        if img is None: continue
+        cam_imgs[cam] = img
+        K, T, _ = proj.get_transform(st, cam)
+        if K is None: continue
+        dets = detector.predict(img)
+        dets = [d for d in dets if d['class_id'] in OBSTACLE_CLASS_IDS]
+        # Per-camera NMS
+        keep = np.ones(len(dets), dtype=bool)
+        for i in range(len(dets)):
             if not keep[i]: continue
-            xi1,yi1,xi2,yi2=pan_dets[i]['bbox']; ai=(xi2-xi1)*(yi2-yi1)
-            for j in range(i+1,len(pan_dets)):
-                if not keep[j] or pan_dets[i]['class_id']!=pan_dets[j]['class_id']: continue
-                xj1,yj1,xj2,yj2=pan_dets[j]['bbox']
-                ix1,iy1=max(xi1,xj1),max(yi1,yj1); ix2,iy2=min(xi2,xj2),min(yi2,yj2)
+            xi1,yi1,xi2,yi2=dets[i]['bbox']; ai=(xi2-xi1)*(yi2-yi1)
+            for j in range(i+1,len(dets)):
+                if not keep[j] or dets[i]['class_id']!=dets[j]['class_id']: continue
+                xj1,yj1,xj2,yj2=dets[j]['bbox']; ix1,iy1=max(xi1,xj1),max(yi1,yj1); ix2,iy2=min(xi2,xj2),min(yi2,yj2)
                 iw,ih=max(0,ix2-ix1),max(0,iy2-iy1); inter=iw*ih; aj=(xj2-xj1)*(yj2-yj1)
                 if inter/(ai+aj-inter+1e-8)>0.3: keep[j]=False
-        pan_dets = [d for k,d in zip(keep,pan_dets) if k]
-        # Split back to per-camera detections
-        cam_dets = split_detections(pan_dets, x_offsets)
-        for cam, dets in cam_dets.items():
-            if not dets: continue
-            K, T, _ = proj.get_transform(st, cam)
-            if K is None: continue
-            pf = pipeline_predict(model, lidar, dets, K, T, device, num_points=512, min_points=30)
-            for p in pf: p['camera'] = cam
-            all_preds.extend(pf)
-
-    # Thumbnails for display
-    cam_frames = {}
-    for cam in CM:
-        if cam in cam_imgs:
-            cam_frames[cam] = cv2.resize(cam_imgs[cam], (280, 160))
+        dets = [d for k,d in zip(keep,dets) if k]
+        pf = pipeline_predict(model, lidar, dets, K, T, device, num_points=512, min_points=30)
+        for p in pf: p['camera'] = cam
+        all_preds.extend(pf)
+        cam_frames[cam] = cv2.resize(img, (280, 160))
 
     # Dedup
     all_preds.sort(key=lambda p: -p['num_pts'])
