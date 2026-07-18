@@ -68,6 +68,11 @@ class Track:
 
         if self.fitted_v > 0.3:
             self.fitted_yaw = math.atan2(vy, vx)
+            # Resolve model yaw 180° ambiguity: flip if closer to velocity direction
+            yaw_diff = abs(self.fitted_yaw - self.model_yaw)
+            yaw_diff_flipped = abs(self.fitted_yaw - (self.model_yaw + math.pi) % (2*math.pi))
+            if yaw_diff_flipped < yaw_diff:
+                self.model_yaw = (self.model_yaw + math.pi) % (2*math.pi)
 
         # Acceleration from velocity change over two halves
         if len(self.history) >= 4 and dt > 0.3:
