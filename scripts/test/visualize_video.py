@@ -66,7 +66,7 @@ for fi, sample in enumerate(scene_samples):
             img = cv2.imread(img_path)
             if img is not None: cam_imgs[cam] = img
 
-    panorama, x_offsets = stitch_panorama(cam_imgs, target_height=360)
+    panorama, x_offsets = stitch_panorama(cam_imgs, target_height=640)
     all_preds = []
 
     if panorama is not None:
