@@ -9,7 +9,7 @@ import numpy as np
 
 
 def pipeline_predict(model, pts_lidar, dets, K, T_lidar2cam, device,
-                     num_points=512, min_points=30, class_names=None):
+                     num_points=512, min_points=20, class_names=None):
     """对一帧的所有 YOLO detection 执行完整的 frustum→净化→模型 管线.
 
     Args:
