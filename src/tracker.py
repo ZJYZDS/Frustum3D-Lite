@@ -18,7 +18,8 @@ class Track:
         self.track_id = track_id
         self.class_id = class_id
         self.class_name = class_name
-        self.history = [(timestamp, center.copy(), size.copy(), yaw)]  # (t, cx, cy, cz)
+        self.model_yaw = yaw       # geometric yaw from model (primary)
+        self.history = [(timestamp, center.copy(), size.copy(), yaw)]
         self.fitted_yaw = yaw      # yaw from velocity direction
         self.fitted_v = 0.0        # speed (m/s)
         self.fitted_a = 0.0        # acceleration (m/s²)
@@ -26,9 +27,9 @@ class Track:
         self.missed_frames = 0
 
     def update(self, timestamp, center, size, yaw):
+        self.model_yaw = yaw  # keep latest model yaw
         self.history.append((timestamp, center.copy(), size.copy(), yaw))
         self.missed_frames = 0
-        # Limit history length
         if len(self.history) > 30:
             self.history = self.history[-30:]
 
@@ -198,9 +199,10 @@ class Tracker:
                     'track_id': t.track_id,
                     'center': last_center,
                     'size': last_size,
-                    'yaw': t.fitted_yaw,       # from velocity direction
-                    'v': t.fitted_v,           # m/s
-                    'a': t.fitted_a,           # m/s²
+                    'yaw': t.fitted_yaw,          # motion yaw (velocity direction)
+                    'model_yaw': t.model_yaw,      # geometric yaw from model
+                    'v': t.fitted_v,              # m/s
+                    'a': t.fitted_a,              # m/s²
                     'class_id': t.class_id,
                     'class_name': t.class_name,
                     'history_len': len(t.history),

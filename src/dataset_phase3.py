@@ -3,7 +3,7 @@ Phase 3 Dataset: 绝对回归 + 多帧聚合 + 视锥裁剪 + 地面去除 + 点
 
 管线:
   1. 加载 CAM_FRONT 图像 → YOLO 检测 (bbox only)
-  2. 多帧聚合 LiDAR (nsweeps=10) → RANSAC 地面去除
+  2. 多帧聚合 LiDAR (nsweeps=5) → RANSAC 地面去除
   3. GT 投影中心 2D 匹配
   4. 视锥裁剪 (YOLO 4 条射线) → ROR 离群点剔除 → DBSCAN 最大簇
   5. 采样到固定点数 → 显式极值 + RGB Crop + 绝对回归标签
@@ -191,7 +191,7 @@ def filter_points_by_frustum(pts_lidar, bbox, K, T_lidar2cam, margin=5):
     return pts_lidar[valid_z & mask_bbox], margin
 
 
-def filter_points_by_bbox_projection(pts_lidar, bbox, K, T_lidar2cam, depth_range=(0.5, 80.0)):
+def filter_points_by_bbox_projection(pts_lidar, bbox, K, T_lidar2cam, depth_range=(0.5, 55.0)):
     """Fallback: 简单 bbox 投影 (不做视锥, 类似 Phase 1).
 
     当视锥裁剪点数不足时回退到此方法, 保证召回率.
@@ -219,7 +219,9 @@ def filter_points_by_bbox_projection(pts_lidar, bbox, K, T_lidar2cam, depth_rang
 # ==============================================================================
 # Face Coverage: 每面点云占对应 3D bbox 面积的比例
 # ==============================================================================
-
+"""
+only 4 个 侧面face 的 pointcloud coverage (0,1) -> key []
+"""
 def compute_face_coverage(pts_local, bbox_size):
     """计算点云在 3D bbox 各面的覆盖比例.
 
@@ -293,7 +295,7 @@ def remove_statistical_outliers(points, nb_neighbors=20, std_ratio=2.0):
     return np.asarray(pcd.select_by_index(ind).points)
 
 
-def extract_largest_cluster(points, eps=0.6, min_samples=8):
+def extract_largest_cluster(points, eps=0.6, min_samples=4):
     """DBSCAN 取最大簇 — 解决多物体重叠/遮挡问题.
 
     仅在点数 > 30 时执行, 防止稀疏点被误删.
@@ -467,11 +469,6 @@ class Phase3Dataset(Dataset):
     # ==========================================================================
     # 坐标变换辅助
     # ==========================================================================
-
-    # ==========================================================================
-    # 坐标变换辅助
-    # ==========================================================================
-
     def _get_ego_pose(self, sample):
         """从 sample dict 获取 ego_pose (通过 LIDAR_TOP 的 sample_data)."""
         lidar_sd_token = sample['data']['LIDAR_TOP']

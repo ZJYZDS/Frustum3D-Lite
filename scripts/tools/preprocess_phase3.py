@@ -56,7 +56,7 @@ def main():
     parser = argparse.ArgumentParser(description="Phase 3 offline preprocessing")
     parser.add_argument("--nusc_root", default="data/nuscenes")
     parser.add_argument("--version", default="v1.0-mini")
-    parser.add_argument("--nsweeps", type=int, default=10)
+    parser.add_argument("--nsweeps", type=int, default=5)
     parser.add_argument("--split", default="all", choices=["train", "val", "all"])
     parser.add_argument("--val_scene_ids", type=int, default=2)
     parser.add_argument("--ransac_thresh", type=float, default=0.25)

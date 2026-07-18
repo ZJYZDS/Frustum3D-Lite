@@ -121,17 +121,19 @@ for fi, sample in enumerate(scene_samples):
     ax_lidar.set_title(f'360 deg LiDAR — {len(tracks)} objects', color='white', fontsize=12)
     for spine in ax_lidar.spines.values(): spine.set_color('#555')
 
-    # Draw tracks with motion info
+    # Draw tracks: bbox uses model yaw, velocity arrow is separate
     for trk in tracks:
-        c = trk['center']; s = trk['size']; yaw = trk['yaw']
+        c = trk['center']; s = trk['size']
+        model_yaw = trk.get('model_yaw', trk['yaw'])  # geometric yaw from model
+        mot_yaw = trk['yaw']                           # motion yaw from tracker
         v = trk['v']; tid = trk['track_id']
         if abs(c[0]) > mr or abs(c[1]) > mr: continue
-        cr = bc(c, s, yaw); clr = CC.get(trk['class_id'], 'red')
+        cr = bc(c, s, model_yaw); clr = CC.get(trk['class_id'], 'red')
         for i, j in BE: ax_lidar.plot([cr[i, 0], cr[j, 0]], [cr[i, 1], cr[j, 1]], color=clr, lw=2.5)
-        # Velocity arrow
-        if v > 0.3:
-            ax_lidar.arrow(c[0], c[1], 2 * v * math.cos(yaw), 2 * v * math.sin(yaw),
-                           head_width=0.4, head_length=0.4, fc=clr, ec=clr, lw=1.5, alpha=0.8)
+        # Velocity arrow (motion direction, only if moving)
+        if v > 0.5:
+            ax_lidar.arrow(c[0], c[1], 2 * v * math.cos(mot_yaw), 2 * v * math.sin(mot_yaw),
+                           head_width=0.4, head_length=0.4, fc='cyan', ec='cyan', lw=1.5, alpha=0.8)
         ax_lidar.text(c[0] + 0.5, c[1] + 0.5,
                       f'{trk["class_name"]}#{tid} {v:.1f}m/s',
                       fontsize=7, color=clr, weight='bold')

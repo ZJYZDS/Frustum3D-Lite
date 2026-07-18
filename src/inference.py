@@ -44,7 +44,7 @@ def pipeline_predict(model, pts_lidar, dets, K, T_lidar2cam, device,
 
     CENTER_SCALE = 3.0
     SIZE_SCALE = 5.0
-    SIZE_EXPAND = 1.12  # 膨胀 12% 确保 bbox 包住所有可见点云
+    SIZE_EXPAND = 1.10  # 膨胀 10% 确保 bbox 包住所有可见点云
 
     predictions = []
 
