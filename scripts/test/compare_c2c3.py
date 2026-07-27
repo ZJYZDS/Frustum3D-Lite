@@ -9,9 +9,9 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader
 
-from src.dataset_phase2 import Phase2Dataset, phase2_collate
-from src.fusion import LidarOnlyRefiner, CrossModalFusion
-from src.metrics import compute_metrics
+from pipeline.dataset.phase2 import Phase2Dataset, phase2_collate
+from pipeline.fusion import LidarOnlyRefiner, CrossModalFusion
+from pipeline.metrics import compute_metrics
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

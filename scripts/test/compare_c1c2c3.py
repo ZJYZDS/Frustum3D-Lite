@@ -20,10 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import torch
 from torch.utils.data import DataLoader
 
-from src.dataset_phase2 import Phase2Dataset, phase2_collate
-from src.fusion import CrossModalFusion, ImageOnlyRefiner, LidarOnlyRefiner
-from src.loss import BboxRefinementLoss
-from src.metrics import compute_metrics
+from pipeline.dataset.phase2 import Phase2Dataset, phase2_collate
+from pipeline.fusion import CrossModalFusion, ImageOnlyRefiner, LidarOnlyRefiner
+from pipeline.loss import BboxRefinementLoss
+from pipeline.metrics import compute_metrics
 
 
 def train_one_epoch(model, loader, criterion, optimizer, device):

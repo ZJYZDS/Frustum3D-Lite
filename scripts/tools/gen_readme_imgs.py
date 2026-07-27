@@ -5,9 +5,10 @@ import torch
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from src.dataset_phase3 import Phase3Dataset, aggregate_sweeps
-from src.fusion import PointNet3DDetector
-from src.dataset_phase1 import LiDARProjector
+from pipeline.dataset.phase3 import Phase3Dataset
+from pipeline.preprocess import aggregate_sweeps
+from pipeline.fusion import PointNet3DDetector
+from pipeline.projector import LiDARProjector
 from nuscenes.nuscenes import NuScenes
 
 device = torch.device('cuda')

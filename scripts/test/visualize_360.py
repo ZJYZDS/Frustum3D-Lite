@@ -1,12 +1,13 @@
 """360° visualization: full LiDAR + all 6 camera YOLO detections with 3D bbox."""
 import sys, os, math, cv2, numpy as np; sys.path.insert(0, '.')
 import torch, matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
-from src.dataset_phase3 import Phase3Dataset, aggregate_sweeps, \
+from pipeline.dataset.phase3 import Phase3Dataset
+from pipeline.preprocess import aggregate_sweeps, \
     filter_points_by_frustum, remove_statistical_outliers, extract_largest_cluster
-from src.fusion import PointNet3DDetector
-from src.dataset_phase1 import LiDARProjector
-from src.detector import YOLOPtDetector, OBSTACLE_CLASS_IDS
-from src.inference import pipeline_predict
+from pipeline.fusion import PointNet3DDetector
+from pipeline.projector import LiDARProjector
+from pipeline.detector import YOLOPtDetector, OBSTACLE_CLASS_IDS
+from pipeline.inference import pipeline_predict
 from nuscenes.nuscenes import NuScenes
 
 device = torch.device('cuda'); model = PointNet3DDetector().to(device).eval()

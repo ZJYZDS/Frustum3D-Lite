@@ -18,11 +18,11 @@ import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from src.dataset_phase3 import aggregate_sweeps, filter_points_by_frustum, \
+from pipeline.preprocess import aggregate_sweeps, filter_points_by_frustum, \
     remove_statistical_outliers, extract_largest_cluster
-from src.fusion import PointNet3DDetector
-from src.dataset_phase1 import LiDARProjector
-from src.inference import pipeline_predict, pipeline_predict_with_gt
+from pipeline.fusion import PointNet3DDetector
+from pipeline.projector import LiDARProjector
+from pipeline.inference import pipeline_predict, pipeline_predict_with_gt
 from nuscenes.nuscenes import NuScenes
 
 CLASS_NAMES = {0: 'pedestrian', 1: 'rider', 2: 'car', 3: 'truck', 4: 'bus',
@@ -186,7 +186,7 @@ def main():
     projector = LiDARProjector(dc['nusc_root'])
 
     # YOLO detector
-    from src.detector import YOLOPtDetector, OBSTACLE_CLASS_IDS
+    from pipeline.detector import YOLOPtDetector, OBSTACLE_CLASS_IDS
     detector = YOLOPtDetector(pt_path=cfg.get('detector_path','weiTiao_pt/best.pt'))
 
     # Build val frame list
@@ -237,7 +237,7 @@ def main():
             num_points=dc.get('num_points', 512), min_points=30)
 
         # ── GT-bbox predictions (对比) ──
-        from src.dataset_phase3 import Phase3Dataset
+        from pipeline.dataset.phase3 import Phase3Dataset
         val_set = Phase3Dataset(nusc_root=dc['nusc_root'],
             version=dc.get('version','v1.0-mini'), split='val',
             detector_path=cfg.get('detector_path','weiTiao_pt/best.pt'),

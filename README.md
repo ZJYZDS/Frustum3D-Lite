@@ -90,28 +90,43 @@ dataset:
 
 ```
 ├── config/
-│   ├── train.yaml              # 训练配置 (数据集/模型/损失)
-│   ├── sensor.yaml             # 传感器标定配置
-│   └── phase3.yaml             # Phase 3 完整配置
-├── src/
-│   ├── fusion.py               # PointNet3DDetector
-│   ├── dataset_phase3.py       # 数据集 + frustum 管线
-│   ├── inference.py            # 推理管线
-│   ├── loss.py / metrics.py    # 损失 / 指标
-│   ├── detector.py             # YOLO 检测器
-│   └── ...
+│   ├── train.yaml                   # 训练配置 (数据集/模型/损失)
+│   ├── sensor.yaml                  # 传感器标定配置
+│   └── phase3.yaml                  # Phase 3 完整配置
+├── pipeline/                         # Python 推理管线 (核心)
+│   ├── detector.py                  # YOLO 2D 检测器 (ONNX / .pt)
+│   ├── projector.py                 # LiDAR→Camera 投影 + 四元数工具
+│   ├── fusion.py                    # PointNet3DDetector 回归模型
+│   ├── pointnet.py                  # PointNet++ SetAbstraction 核心
+│   ├── inference.py                 # pipeline_predict 主管线
+│   ├── loss.py / metrics.py         # 损失 / 评估指标
+│   ├── tracker.py                   # 多目标跟踪 (Hungarian + CV)
+│   ├── profiler.py                  # 性能埋点 (per-stage timing)
+│   ├── ground_removal.py            # RANSAC 地面分割
+│   ├── init_estimator.py            # 2D→3D 初始估计器
+│   ├── panorama.py                  # 360° 全景拼接
+│   ├── preprocess/
+│   │   ├── frustum.py               # 视锥裁剪 + 面覆盖率
+│   │   └── denoise.py               # ROR 去噪 + DBSCAN 聚类 + 多帧聚合
+│   └── dataset/
+│       ├── phase1.py                # Phase 1 数据集
+│       ├── phase2.py                # Phase 2 数据集
+│       └── phase3.py                # Phase 3 数据集
+├── src/                              # C++ 实现占位 (PointNet++ CUDA 等)
+│   └── CMakeLists.txt
 ├── scripts/
-│   ├── train/                  # 训练入口
+│   ├── train/                       # 训练入口
 │   │   ├── train_phase3.py
 │   │   └── train_phase2.py
-│   ├── test/                   # 测试/评估/可视化
+│   ├── test/                        # 测试/评估/可视化/性能分析
 │   │   ├── visualize_360.py
 │   │   ├── visualize_scene.py
 │   │   ├── visualize_infer.py
-│   │   └── visualize_c2.py
-│   └── tools/                  # 预处理/工具
+│   │   ├── visualize_video.py
+│   │   └── profile_inference.py     # 性能基线
+│   └── tools/                       # 预处理/工具
 │       └── preprocess_phase3.py
-└── display/                    # 可视化输出 (gitignored)
+└── display/                         # 可视化输出 (gitignored)
 ```
 
 ## 坐标约定

@@ -16,9 +16,10 @@ import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from src.dataset_phase3 import Phase3Dataset, aggregate_sweeps
-from src.fusion import PointNet3DDetector
-from src.dataset_phase1 import LiDARProjector
+from pipeline.dataset.phase3 import Phase3Dataset
+from pipeline.preprocess import aggregate_sweeps
+from pipeline.fusion import PointNet3DDetector
+from pipeline.projector import LiDARProjector
 
 CLASS_NAMES = {0: 'pedestrian', 1: 'rider', 2: 'car', 3: 'truck', 4: 'bus', 6: 'motorcycle', 7: 'bicycle'}
 CLASS_COLORS = {0: '#FF6B6B', 1: '#FF9999', 2: '#6BCB77', 3: '#E67E22', 4: '#9B59B6', 6: '#4D96FF', 7: '#FFD93D'}

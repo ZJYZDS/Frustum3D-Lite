@@ -19,12 +19,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src.dataset_phase1 import (LiDARProjector, quaternion_to_yaw, quaternion_to_mat,
+from pipeline.projector import (LiDARProjector, quaternion_to_yaw, quaternion_to_mat,
                                  rotate_points_z)
-from src.detector import YOLOSegONNX, OBSTACLE_CLASS_IDS, OBSTACLE_CLASSES
-from src.init_estimator import estimate_yaw_pca, filter_points_by_mask
-from src.fusion import COCO_CLS_TO_GROUP
-from src.model import farthest_point_sample
+from pipeline.detector import YOLOSegONNX, OBSTACLE_CLASS_IDS, OBSTACLE_CLASSES
+from pipeline.init_estimator import estimate_yaw_pca, filter_points_by_mask
+from pipeline.fusion import COCO_CLS_TO_GROUP
+from pipeline.pointnet import farthest_point_sample
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_ROOT = "data/nuscenes"
@@ -159,7 +159,7 @@ def load_nuscenes_tables(data_root):
 
 
 def main():
-    from src.fusion import LidarOnlyRefiner
+    from pipeline.fusion import LidarOnlyRefiner
 
     model = LidarOnlyRefiner().to(DEVICE)
     ckpt = torch.load(CKPT_PATH, map_location=DEVICE, weights_only=True)
@@ -194,7 +194,7 @@ def main():
         sensor = sd["filename"].split("/")[1]
         frame_sensors.setdefault(sd["sample_token"], {})[sensor] = sd["token"]
 
-    from src.dataset_phase2 import Phase2Dataset
+    from pipeline.dataset.phase2 import Phase2Dataset
     val_ds = Phase2Dataset(DATA_ROOT, split='val')
     val_frame_set = val_ds._frames
     del val_ds

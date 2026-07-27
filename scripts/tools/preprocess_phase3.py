@@ -23,7 +23,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from nuscenes.nuscenes import NuScenes
-from src.dataset_phase3 import aggregate_sweeps, remove_ground_ransac
+from pipeline.preprocess import aggregate_sweeps
+from pipeline.preprocess.denoise import remove_ground_ransac
 
 
 def build_frame_list(nusc, val_scene_ids=2, split='all'):

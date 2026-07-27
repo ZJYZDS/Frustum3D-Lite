@@ -8,10 +8,11 @@ import numpy as np, torch, yaml
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from src.dataset_phase3 import Phase3Dataset, phase3_collate
-from src.fusion import PointNet3DDetector
-from src.loss import PointNet3DLoss
-from src.metrics import compute_metrics_absolute
+from pipeline.dataset.phase3 import Phase3Dataset
+from pipeline.preprocess import phase3_collate
+from pipeline.fusion import PointNet3DDetector
+from pipeline.loss import PointNet3DLoss
+from pipeline.metrics import compute_metrics_absolute
 
 CLASS_NAMES = {0: 'pedestrian', 1: 'rider', 2: 'car', 3: 'truck', 4: 'bus', 6: 'motorcycle', 7: 'bicycle'}
 
