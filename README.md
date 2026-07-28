@@ -80,7 +80,9 @@ dataset:
 ## 模型概览
 
 - 骨干：PointNet 风格的点云特征提取
-- 输入特征：backbone_feat + prior/centroid/extent/viewdir/face_cov/bbox_feat 等（合并后特征维度示例：220）
+- 输入特征：backbone_feat + prior/centroid/extent/viewdir/face_cov/bbox_feat 等。
+  - 注意：`face_cov`（16 dim）在推理阶段会被置为 0，用作占位/未来扩展，推理时并不参与有效计算。
+  - 合并后特征维度示例：220（其中 face_cov 16 dim 在推理时为 0，实际有效维度约 204）。
 - 每个任务分头回归中心、尺寸与朝向
 
 ## 坐标与约定
@@ -93,4 +95,4 @@ dataset:
 欢迎提交 Issue 与 PR：
 - 计划项：多目标跟踪、轨迹预测、占用网格、更多数据集适配与推理加速。
 
-如需我把 README 翻译成英文版或增加安装/单测/CI 示例，我可以继续修改。
+如需我把 README 翻译成英文版或增加安装/单测/CI 示例，我可以继续修改.
