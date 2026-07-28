@@ -1,134 +1,96 @@
 # Frustum3D-Lite
 
-端到端 3D 目标检测：多相机 2D 检测 + LiDAR 点云 → 360° 全景 3D BBox 回归。
+轻量级、端到端的 360° 多传感器 3D 目标检测框架。
 
-> **项目状态: 进行中** — 后续将扩展更多功能（多目标跟踪 / 轨迹预测 / 占用网格 / 多数据集支持等）。
+Light3D（Frustum3D-Lite）使用多相机的 2D 检测框引导 LiDAR 点云裁剪（frustum），通过轻量化的 PointNet 风格回归网络直接预测 3D 包围盒（cx, cy, cz, w, l, h, yaw），无需 BEV 投影或深度估计，适合资源受限的移动平台与竞赛场景。
+
+> 项目状态：进行中 — 目标：实时 360° 检测、轻量化部署与多数据集支持（nuScenes / KITTI）。
 
 ## 特性
 
-- **360° 全向检测**: 6 相机 + LiDAR 覆盖车辆周围 40m 范围
-- **端到端**: YOLO 2D 检测 → frustum 点云提取 → PointNet 3D 回归
-- **轻量**: 50K 参数，单卡 GPU 推理
-- **数据集可切换**: nuScenes / KITTI，通过 YAML 配置
-- **传感器可配置**: 相机-LiDAR 内外参 YAML 驱动
+- 360° 全向检测：支持多相机（默认 6 个）+ LiDAR，多传感器融合覆盖车辆周边场景。
+- 端到端流水线：YOLO 2D 检测 → frustum 点云裁剪 → 去噪/聚类 → PointNet 回归 3D BBox。
+- 轻量网络：模型参数量约 50K，适合单卡或嵌入式平台推理。
+- 可配置：通过 YAML 切换数据集（nuScenes / KITTI）与传感器标定（相机‑LiDAR 内外参）。
 
-## 效果 (360° 实时检测, 40 帧 scene, 50m)
+## 效果示例
 
-> 左: 360° LiDAR 俯视图 (红=自身<1.5m). 右: 6 相机 YOLO 2D 检测框. 彩色框=3D BBox.
+左：360° LiDAR 俯视图（红=自身点）；右：6 相机 YOLO 2D 检测与回归出的 3D BBox。
 
 ![demo](docs/images/demo.gif)
 
-*实时检测: 360° LiDAR + 6 相机 YOLO (40 frames)*
-
-## 管线
-
-```
-多相机图像 (6×1600×900)                LIDAR_TOP (5-sweep)
-        │                                      │
-        ├─ YOLO → 2D bboxes                    ├─ 地面去除
-        │                                      ├─ 自身点滤波 (<1.5m)
-        │                                      │
-        └────── frustum 裁剪 ──────────────────┘
-                      │
-              ROR 去噪 → DBSCAN 聚类
-                      │
-              采样 512 点 → PointNet3DDetector
-                      │
-              3D BBox: [cx, cy, cz, w, l, h, yaw]
-```
-
-## 模型
-
-| 组件 | 规格 |
-|------|------|
-| 骨干 | PointNet (3→64→128 + MaxPool) |
-| 融合特征 | 128(backbone) + 16(prior) + 16(centroid) + 16(extent) + 16(viewdir) + 16(face_cov) + 12(bbox_feat) = 220 |
-| Center head | 220→192→96→3 |
-| Size head | 220→96→3 |
-| Yaw head | 220→96→2 |
-
-## 指标 (nuScenes mini, 360°)
-
-| 指标 | 值 |
-|------|-----|
-| Car center error | 0.26m |
-| Car yaw error | 7.6° |
-| Car size error | 0.15m |
-
 ## 快速开始
 
+1. 安装依赖（建议在虚拟环境或容器内运行）
+
 ```bash
-# 预处理
+pip install -r requirements.txt
+# 如果使用 ONNX/pyrealsense 等工具，请根据需要安装 tools/requirements.txt
+pip install -r tools/requirements.txt
+```
+
+2. 预处理（示例：5 sweep）
+
+```bash
 python scripts/tools/preprocess_phase3.py --nsweeps 5
+```
 
-# 训练
+3. 训练（示例配置）
+
+```bash
 python scripts/train/train_phase3.py --config config/train.yaml --epochs 80
+```
 
+4. 可视化/推理
+
+```bash
 # 360° 可视化
 python scripts/test/visualize_360.py
+
+# 单场景推理（参考 pipeline/inference.py）
+python pipeline/inference.py --config config/train.yaml --scene /path/to/scene
 ```
 
-## 配置
+## 目录结构（概要）
 
-| 文件 | 用途 |
-|------|------|
-| `config/train.yaml` | 训练参数、数据集路径、模型超参 |
-| `config/sensor.yaml` | LiDAR/相机内外参、检测范围 |
-| `config/phase3.yaml` | Phase 3 完整配置 (向后兼容) |
+```
+config/                # 训练与传感器标定配置（train.yaml, sensor.yaml, phase3.yaml）
+pipeline/              # 推理/融合管线：detector, projector, fusion, pointnet, preprocess
+scripts/               # 训练、测试与预处理脚本
+src/                   # C++ 占位（CUDA/加速实现）
+display/               # 可视化输出（通常被 gitignore）
+```
 
-### 切换数据集
+**流程概览**：多相机图像 → YOLO 2D 检测 → frustum 裁剪 LiDAR → 地面去除 + 去噪 + DBSCAN 聚类 → 采样点 (e.g. 512) → PointNet3DDetector 回归 3D BBox。
 
+## 配置要点
+
+- `config/train.yaml`：训练参数、数据路径、超参
+- `config/sensor.yaml`：相机/LiDAR 内外参与检测范围
+- 支持通过 YAML 切换数据集（nuScenes / KITTI）
+
+示例：
 ```yaml
-# config/train.yaml
 dataset:
-  name: nuscenes        # nuscenes | kitti
-  root: data/nuscenes   # 数据集路径
-  version: v1.0-mini    # nuScenes 版本
+  name: nuscenes   # nuscenes | kitti
+  root: data/nuscenes
+  version: v1.0-mini
 ```
 
-## 项目结构
+## 模型概览
 
-```
-├── config/
-│   ├── train.yaml                   # 训练配置 (数据集/模型/损失)
-│   ├── sensor.yaml                  # 传感器标定配置
-│   └── phase3.yaml                  # Phase 3 完整配置
-├── pipeline/                         # Python 推理管线 (核心)
-│   ├── detector.py                  # YOLO 2D 检测器 (ONNX / .pt)
-│   ├── projector.py                 # LiDAR→Camera 投影 + 四元数工具
-│   ├── fusion.py                    # PointNet3DDetector 回归模型
-│   ├── pointnet.py                  # PointNet++ SetAbstraction 核心
-│   ├── inference.py                 # pipeline_predict 主管线
-│   ├── loss.py / metrics.py         # 损失 / 评估指标
-│   ├── tracker.py                   # 多目标跟踪 (Hungarian + CV)
-│   ├── profiler.py                  # 性能埋点 (per-stage timing)
-│   ├── ground_removal.py            # RANSAC 地面分割
-│   ├── init_estimator.py            # 2D→3D 初始估计器
-│   ├── panorama.py                  # 360° 全景拼接
-│   ├── preprocess/
-│   │   ├── frustum.py               # 视锥裁剪 + 面覆盖率
-│   │   └── denoise.py               # ROR 去噪 + DBSCAN 聚类 + 多帧聚合
-│   └── dataset/
-│       ├── phase1.py                # Phase 1 数据集
-│       ├── phase2.py                # Phase 2 数据集
-│       └── phase3.py                # Phase 3 数据集
-├── src/                              # C++ 实现占位 (PointNet++ CUDA 等)
-│   └── CMakeLists.txt
-├── scripts/
-│   ├── train/                       # 训练入口
-│   │   ├── train_phase3.py
-│   │   └── train_phase2.py
-│   ├── test/                        # 测试/评估/可视化/性能分析
-│   │   ├── visualize_360.py
-│   │   ├── visualize_scene.py
-│   │   ├── visualize_infer.py
-│   │   ├── visualize_video.py
-│   │   └── profile_inference.py     # 性能基线
-│   └── tools/                       # 预处理/工具
-│       └── preprocess_phase3.py
-└── display/                         # 可视化输出 (gitignored)
-```
+- 骨干：PointNet 风格的点云特征提取
+- 输入特征：backbone_feat + prior/centroid/extent/viewdir/face_cov/bbox_feat 等（合并后特征维度示例：220）
+- 每个任务分头回归中心、尺寸与朝向
 
-## 坐标约定
+## 坐标与约定
 
-LiDAR 帧: X=右, Y=前, Z=上. nuScenes 尺寸: `[width, length, height]`.
+- LiDAR 坐标系：X = 右, Y = 前, Z = 上
+- 尺寸格式：`[width, length, height]`（nuScenes 约定）
+
+## 贡献与计划
+
+欢迎提交 Issue 与 PR：
+- 计划项：多目标跟踪、轨迹预测、占用网格、更多数据集适配与推理加速。
+
+如需我把 README 翻译成英文版或增加安装/单测/CI 示例，我可以继续修改。
